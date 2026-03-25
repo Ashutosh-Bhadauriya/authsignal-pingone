@@ -16,6 +16,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
+import { config } from "../config.js";
 import { davinciApiKeyAuth } from "../middleware/auth.js";
 import * as authsignalService from "../services/authsignal.js";
 import type {
@@ -26,6 +27,26 @@ import type {
 } from "../types/index.js";
 
 const router = Router();
+const SAFE_IDENTIFIER_RE = /^[a-zA-Z0-9_.@-]{1,128}$/;
+const SAFE_ACTION_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+// Allowlist of permitted redirect URL origins.
+// In production, configure via environment variable.
+function isAllowedRedirectUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const appOrigin = new URL(config.app.baseUrl).origin;
+    const allowedOrigins = [
+      appOrigin,
+      "https://auth.pingone.com",
+      "https://apps.pingone.com",
+      "https://orchestrate-api.pingone.com",
+    ];
+    return allowedOrigins.some((origin) => parsed.origin === origin);
+  } catch {
+    return false;
+  }
+}
 
 // All DaVinci bridge endpoints require API key auth
 router.use(davinciApiKeyAuth);
@@ -46,6 +67,10 @@ router.post("/mfa/init", async (req: Request, res: Response) => {
     }
     if (!body.redirectUrl) {
       res.status(400).json({ error: "redirectUrl is required" });
+      return;
+    }
+    if (!isAllowedRedirectUrl(body.redirectUrl)) {
+      res.status(400).json({ error: "redirectUrl is not in the allowed origins" });
       return;
     }
 
@@ -93,8 +118,37 @@ router.post("/mfa/verify", async (req: Request, res: Response) => {
       res.status(400).json({ error: "token is required" });
       return;
     }
+    if (!body.userId) {
+      res.status(400).json({ error: "userId is required" });
+      return;
+    }
+    if (!body.action) {
+      res.status(400).json({ error: "action is required" });
+      return;
+    }
+    if (!SAFE_IDENTIFIER_RE.test(body.userId)) {
+      res.status(400).json({ error: "Invalid userId format" });
+      return;
+    }
+    if (!SAFE_ACTION_RE.test(body.action)) {
+      res.status(400).json({ error: "Invalid action format" });
+      return;
+    }
 
     const result = await authsignalService.validateChallenge(body.token);
+
+    if (!result.isValid) {
+      res.status(403).json({ error: "MFA verification failed" });
+      return;
+    }
+    if (result.userId !== body.userId) {
+      res.status(403).json({ error: "MFA verification user mismatch" });
+      return;
+    }
+    if (result.actionCode !== body.action) {
+      res.status(403).json({ error: "MFA verification action mismatch" });
+      return;
+    }
 
     const response: DaVinciMfaVerifyResponse = {
       isValid: result.isValid,
@@ -159,6 +213,10 @@ router.post("/passwordless/init", async (req: Request, res: Response) => {
 
     if (!redirectUrl) {
       res.status(400).json({ error: "redirectUrl is required" });
+      return;
+    }
+    if (!isAllowedRedirectUrl(redirectUrl)) {
+      res.status(400).json({ error: "redirectUrl is not in the allowed origins" });
       return;
     }
     if (!userId && !email) {

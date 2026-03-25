@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 const required = (name: string): string => {
   const value = process.env[name];
   if (!value) {
@@ -8,6 +10,18 @@ const required = (name: string): string => {
 
 const optional = (name: string, fallback: string): string =>
   process.env[name] || fallback;
+
+const parseTrustProxy = (value: string): boolean | number | string => {
+  if (value === "true") return true;
+  if (value === "false") return false;
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isNaN(parsed) && parsed.toString() === value) {
+    return parsed;
+  }
+
+  return value;
+};
 
 export const config = {
   port: parseInt(optional("PORT", "3000"), 10),
@@ -25,9 +39,9 @@ export const config = {
 
   // ─── PingOne ────────────────────────────────────────────────────────────
   pingone: {
-    environmentId: required("PINGONE_ENVIRONMENT_ID"),
-    clientId: required("PINGONE_CLIENT_ID"),
-    clientSecret: required("PINGONE_CLIENT_SECRET"),
+    environmentId: optional("PINGONE_ENVIRONMENT_ID", ""),
+    clientId: optional("PINGONE_CLIENT_ID", ""),
+    clientSecret: optional("PINGONE_CLIENT_SECRET", ""),
     authBaseUrl: optional(
       "PINGONE_AUTH_BASE_URL",
       "https://auth.pingone.com"
@@ -43,6 +57,7 @@ export const config = {
     baseUrl: optional("APP_BASE_URL", "http://localhost:3000"),
     sessionSecret: required("SESSION_SECRET"),
     sessionMaxAge: parseInt(optional("SESSION_MAX_AGE", "3600"), 10),
+    trustProxy: parseTrustProxy(optional("TRUST_PROXY", "false")),
   },
 
   // ─── DaVinci API Key (for bridge auth) ─────────────────────────────────

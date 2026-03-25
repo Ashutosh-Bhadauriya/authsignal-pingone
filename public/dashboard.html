@@ -92,7 +92,7 @@
     <div id="dashboard" style="display:none;">
       <header>
         <h1>Dashboard</h1>
-        <button class="btn btn-danger" onclick="logout()">Sign Out</button>
+        <button class="btn btn-danger" id="logout-btn">Sign Out</button>
       </header>
 
       <div class="card">
@@ -123,7 +123,7 @@
         <p style="font-size: 0.875rem; color: var(--muted); margin-bottom: 1rem;">
           Manage your authenticators: add passkeys, TOTP apps, phone numbers, and more.
         </p>
-        <button class="btn btn-primary" onclick="openMfaSettings()">
+        <button class="btn btn-primary" id="mfa-settings-btn">
           Manage Authenticators
         </button>
       </div>
@@ -194,9 +194,18 @@
     }
 
     async function logout() {
-      await fetch('/demo/logout', { method: 'POST' });
-      window.location.href = '/';
+      var res = await fetch('/demo/logout', { method: 'POST' });
+      var data = await res.json();
+      // Redirect to PingOne signoff to end SSO session, then back to our app
+      if (data.signoffUrl) {
+        window.location.href = data.signoffUrl;
+      } else {
+        window.location.href = '/';
+      }
     }
+
+    document.getElementById('logout-btn').addEventListener('click', logout);
+    document.getElementById('mfa-settings-btn').addEventListener('click', openMfaSettings);
 
     loadSession();
   </script>

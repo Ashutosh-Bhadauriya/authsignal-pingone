@@ -1,4 +1,4 @@
-import express from "express";
+import express, { type ErrorRequestHandler } from "express";
 import cookieParser from "cookie-parser";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,11 +12,23 @@ import demoRouter from "./routes/demo.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
+// Trust proxy handling must match the deployed proxy chain.
+app.set("trust proxy", config.app.trustProxy);
+app.disable("x-powered-by");
+
+// ─── Startup Warnings ──────────────────────────────────────────────────────
+
+if (!config.davinci.apiKey) {
+  console.warn(
+    "WARNING: DAVINCI_BRIDGE_API_KEY is not set. DaVinci bridge endpoints will return 500."
+  );
+}
+
 // ─── Global Middleware ──────────────────────────────────────────────────────
 
 app.use(securityHeaders);
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+app.use(express.json({ limit: "10kb" }));
+app.use(express.urlencoded({ extended: false, limit: "10kb", parameterLimit: 20 }));
 app.use(cookieParser());
 
 // ─── Static Files ───────────────────────────────────────────────────────────
@@ -40,6 +52,18 @@ app.use("/davinci", apiRateLimit, davinciApiRouter);
 // ─── Demo Application ───────────────────────────────────────────────────────
 
 app.use("/demo", authRateLimit, demoRouter);
+
+app.use((_req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
+
+const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  const message = err instanceof Error ? err.message : "Unknown error";
+  console.error("Unhandled error:", message);
+  res.status(500).json({ error: "Internal server error" });
+};
+
+app.use(errorHandler);
 
 // ─── Start Server ───────────────────────────────────────────────────────────
 

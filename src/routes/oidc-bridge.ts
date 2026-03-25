@@ -21,13 +21,19 @@ import {
   generateCodeVerifier,
   generateCodeChallenge,
 } from "../utils/crypto.js";
-import { decodeTokenUnsafe } from "../utils/jwt.js";
+import {
+  verifyAuthsignalIdToken,
+  verifyPingOneIdToken,
+} from "../utils/jwt.js";
 import type { OidcBridgeSession } from "../types/index.js";
 
 const router = Router();
 
 // In-memory store for OIDC bridge sessions (use Redis in production)
+const MAX_BRIDGE_SESSIONS = 10_000;
 const bridgeSessions = new Map<string, OidcBridgeSession>();
+const SAFE_IDENTIFIER_RE = /^[a-zA-Z0-9_.@-]{1,128}$/;
+const SAFE_ACTION_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 // Clean up expired sessions every 5 minutes
 setInterval(() => {
@@ -39,8 +45,28 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+function getQueryString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeAction(value: string | undefined): string {
+  const action = value ?? "mfa";
+  if (!SAFE_ACTION_RE.test(action)) {
+    throw new Error("Invalid action");
+  }
+  return action;
+}
+
+function getStringClaim(
+  payload: Record<string, unknown>,
+  claim: string
+): string | undefined {
+  const value = payload[claim];
+  return typeof value === "string" ? value : undefined;
+}
+
 /**
- * POST /oidc/initiate
+ * GET /oidc/initiate
  *
  * Called by PingOne (via browser redirect) when the sign-on policy
  * requires an external MFA step. PingOne passes the user's context
@@ -51,29 +77,75 @@ setInterval(() => {
  */
 router.get("/initiate", async (req: Request, res: Response) => {
   try {
-    const {
-      user_id,
-      email,
-      phone,
-      action = "mfa",
-      flow_id,
-      id_token_hint,
-    } = req.query as Record<string, string>;
+    const userIdParam = getQueryString(req.query.user_id);
+    const emailParam = getQueryString(req.query.email);
+    const phone = getQueryString(req.query.phone);
+    const actionParam = getQueryString(req.query.action);
+    const flowId = getQueryString(req.query.flow_id);
+    const idTokenHint = getQueryString(req.query.id_token_hint);
+    const isPingOneResumeFlow = Boolean(flowId);
 
-    // Extract user info from either query params or ID token hint
-    let userId = user_id;
-    let userEmail = email;
+    // PingOne-driven resume mode must derive identity from a verified token hint.
+    if (isPingOneResumeFlow && !idTokenHint) {
+      res.status(400).json({ error: "id_token_hint is required when flow_id is provided" });
+      return;
+    }
 
-    if (id_token_hint && !userId) {
-      const claims = decodeTokenUnsafe(id_token_hint);
-      if (claims) {
-        userId = claims.sub ?? userId;
-        userEmail = (claims as any).email ?? userEmail;
+    let userId = userIdParam;
+    let userEmail = emailParam;
+
+    if (idTokenHint) {
+      try {
+        const claims = await verifyPingOneIdToken(
+          idTokenHint,
+          config.pingone.authBaseUrl,
+          config.pingone.environmentId,
+          config.pingone.clientId
+        );
+
+        const hintedUserId = claims.sub;
+        const hintedEmail = getStringClaim(claims as Record<string, unknown>, "email");
+
+        if (!hintedUserId) {
+          res.status(400).json({ error: "id_token_hint is missing sub" });
+          return;
+        }
+        if (userIdParam && userIdParam !== hintedUserId) {
+          res.status(400).json({ error: "user_id does not match id_token_hint" });
+          return;
+        }
+        if (emailParam && hintedEmail && emailParam !== hintedEmail) {
+          res.status(400).json({ error: "email does not match id_token_hint" });
+          return;
+        }
+
+        userId = hintedUserId;
+        userEmail = hintedEmail ?? userEmail;
+      } catch {
+        res.status(400).json({ error: "Invalid id_token_hint" });
+        return;
       }
     }
 
     if (!userId) {
       res.status(400).json({ error: "user_id is required" });
+      return;
+    }
+
+    if (!SAFE_IDENTIFIER_RE.test(userId)) {
+      res.status(400).json({ error: "Invalid user_id format" });
+      return;
+    }
+    if (flowId && !SAFE_IDENTIFIER_RE.test(flowId)) {
+      res.status(400).json({ error: "Invalid flow_id format" });
+      return;
+    }
+
+    const action = isPingOneResumeFlow ? "mfa" : normalizeAction(actionParam);
+
+    // Enforce max sessions to prevent memory exhaustion
+    if (bridgeSessions.size >= MAX_BRIDGE_SESSIONS) {
+      res.status(503).json({ error: "Service temporarily at capacity" });
       return;
     }
 
@@ -99,7 +171,7 @@ router.get("/initiate", async (req: Request, res: Response) => {
       nonce,
       codeVerifier,
       pingOneUserId: userId,
-      pingOneSessionId: flow_id,
+      pingOneSessionId: flowId,
       action,
       redirectUri: callbackUrl,
       createdAt: Date.now(),
@@ -119,7 +191,7 @@ router.get("/initiate", async (req: Request, res: Response) => {
 
     res.redirect(authUrl.toString());
   } catch (error) {
-    console.error("OIDC initiate error:", error);
+    console.error("OIDC initiate error:", (error as Error).message);
     res.status(500).json({ error: "Failed to initiate MFA challenge" });
   }
 });
@@ -132,17 +204,13 @@ router.get("/initiate", async (req: Request, res: Response) => {
  */
 router.get("/callback", async (req: Request, res: Response) => {
   try {
-    const { code, state, error, error_description } = req.query as Record<
-      string,
-      string
-    >;
+    const code = getQueryString(req.query.code);
+    const state = getQueryString(req.query.state);
+    const error = getQueryString(req.query.error);
 
     if (error) {
-      console.error("Authsignal OIDC error:", error, error_description);
-      res.status(400).json({
-        error: "MFA challenge failed",
-        detail: error_description || error,
-      });
+      console.error("Authsignal OIDC error:", error);
+      res.status(400).json({ error: "MFA challenge failed" });
       return;
     }
 
@@ -166,17 +234,38 @@ router.get("/callback", async (req: Request, res: Response) => {
       codeVerifier: session.codeVerifier,
     });
 
-    // Decode the access token to get the MFA result
-    const claims = decodeTokenUnsafe(tokens.access_token);
-    if (!claims) {
-      res.status(500).json({ error: "Failed to decode Authsignal token" });
+    // Verify the Authsignal OIDC ID token, including the original nonce.
+    const claims = await verifyAuthsignalIdToken(
+      tokens.id_token,
+      config.authsignal.oidcUrl,
+      config.authsignal.tenantId,
+      session.nonce
+    );
+
+    const claimMap = claims as Record<string, unknown>;
+    const actionState = getStringClaim(claimMap, "action_state");
+    const action = getStringClaim(claimMap, "action");
+    const verificationMethod = getStringClaim(
+      claimMap,
+      "action_verification_method"
+    );
+
+    if (!actionState) {
+      res.status(403).json({ error: "Missing action_state in Authsignal response" });
       return;
     }
-
-    const actionState = (claims as any).action_state as string;
-    const verificationMethod = (claims as any).action_verification_method;
     const mfaSucceeded =
       actionState === "CHALLENGE_SUCCEEDED" || actionState === "ALLOW";
+
+    // Verify the token subject matches the expected user
+    if (claims.sub && claims.sub !== session.pingOneUserId) {
+      res.status(403).json({ error: "User mismatch in MFA response" });
+      return;
+    }
+    if (action && action !== session.action) {
+      res.status(403).json({ error: "Action mismatch in MFA response" });
+      return;
+    }
 
     // If PingOne flow_id was provided, redirect back to PingOne to resume
     if (session.pingOneSessionId) {
@@ -188,10 +277,7 @@ router.get("/callback", async (req: Request, res: Response) => {
       if (mfaSucceeded) {
         res.redirect(resumeUrl.toString());
       } else {
-        res.status(403).json({
-          error: "MFA verification failed",
-          state: actionState,
-        });
+        res.status(403).json({ error: "MFA verification failed" });
       }
       return;
     }
@@ -205,7 +291,7 @@ router.get("/callback", async (req: Request, res: Response) => {
       verificationMethod,
     });
   } catch (error) {
-    console.error("OIDC callback error:", error);
+    console.error("OIDC callback error:", (error as Error).message);
     res.status(500).json({ error: "Failed to process MFA callback" });
   }
 });

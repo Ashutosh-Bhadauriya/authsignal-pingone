@@ -1,4 +1,4 @@
-import { randomBytes, createHash, timingSafeEqual as cryptoTimingSafeEqual } from "node:crypto";
+import { randomBytes, createHash, createHmac, timingSafeEqual as cryptoTimingSafeEqual } from "node:crypto";
 
 export function generateState(): string {
   return randomBytes(32).toString("base64url");
@@ -20,9 +20,13 @@ export function generateSessionId(): string {
   return randomBytes(32).toString("hex");
 }
 
+/**
+ * Constant-time string comparison using HMAC to avoid length leaks.
+ * Both values are HMAC'd first so the comparison is always fixed-length.
+ */
 export function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  return cryptoTimingSafeEqual(bufA, bufB);
+  const key = randomBytes(32);
+  const hmacA = createHmac("sha256", key).update(a).digest();
+  const hmacB = createHmac("sha256", key).update(b).digest();
+  return cryptoTimingSafeEqual(hmacA, hmacB);
 }

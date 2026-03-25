@@ -1,4 +1,4 @@
-import { Authsignal } from "@authsignal/node";
+import { Authsignal, VerificationMethod as AuthsignalVerificationMethod } from "@authsignal/node";
 import { config } from "../config.js";
 import type {
   TrackActionRequest,
@@ -29,6 +29,7 @@ export async function trackAction(
       userAgent: req.attributes?.userAgent,
       deviceId: req.attributes?.deviceId,
       custom: req.attributes?.custom as Record<string, string | number | boolean> | undefined,
+      redirectToSettings: req.attributes?.redirectToSettings,
     },
   });
 
@@ -73,6 +74,29 @@ export async function getUser(userId: string) {
 export async function getAuthenticators(userId: string) {
   return authsignal.getAuthenticators({ userId });
 }
+
+// ─── Enroll Verified Authenticator ──────────────────────────────────────────
+// Enroll a pre-verified authenticator for a user (e.g., email from PingOne).
+
+export async function enrollVerifiedAuthenticator(params: {
+  userId: string;
+  verificationMethod: AuthsignalVerificationMethod;
+  email?: string;
+  phoneNumber?: string;
+  isDefault?: boolean;
+}) {
+  return authsignal.enrollVerifiedAuthenticator({
+    userId: params.userId,
+    attributes: {
+      verificationMethod: params.verificationMethod,
+      email: params.email,
+      phoneNumber: params.phoneNumber,
+      isDefault: params.isDefault,
+    },
+  });
+}
+
+export { AuthsignalVerificationMethod };
 
 // ─── OIDC Init Auth ─────────────────────────────────────────────────────────
 // Calls Authsignal's OIDC /init-auth endpoint to get a short-lived token
@@ -127,22 +151,20 @@ export async function oidcTokenExchange(params: {
   token_type: string;
   expires_in: number;
 }> {
-  const basicAuth = Buffer.from(
-    `${config.authsignal.tenantId}:${config.authsignal.secret}`
-  ).toString("base64");
-
+  // Discovery doc specifies client_secret_post (credentials in POST body, not Basic auth)
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code: params.code,
     redirect_uri: params.redirectUri,
     code_verifier: params.codeVerifier,
+    client_id: config.authsignal.tenantId,
+    client_secret: config.authsignal.secret,
   });
 
   const response = await fetch(`${config.authsignal.oidcUrl}/oidc/token`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${basicAuth}`,
     },
     body: body.toString(),
   });

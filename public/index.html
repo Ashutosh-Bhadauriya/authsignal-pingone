@@ -182,12 +182,19 @@
     </div>
   </div>
 
-  <script>
+  <script type="module">
+    import { Authsignal } from 'https://cdn.jsdelivr.net/npm/@authsignal/browser/+esm';
+
+    var authsignal = new Authsignal({
+      tenantId: '87902a54-1902-47a6-b492-43acb0dca6d2',
+      baseUrl: 'https://api.authsignal.com/v1',
+    });
+
     // Show error if redirected with error param
-    const params = new URLSearchParams(window.location.search);
-    const error = params.get('error');
+    var params = new URLSearchParams(window.location.search);
+    var error = params.get('error');
     if (error) {
-      const banner = document.getElementById('error-banner');
+      var banner = document.getElementById('error-banner');
       banner.textContent = decodeURIComponent(error);
       banner.style.display = 'block';
       history.replaceState(null, '', '/');
@@ -195,22 +202,53 @@
 
     // Check if already authenticated
     fetch('/demo/session')
-      .then(r => r.json())
-      .then(data => {
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
         if (data.authenticated) {
           window.location.href = '/dashboard.html';
         }
       })
-      .catch(() => {});
+      .catch(function() {});
 
-    // Passkey sign-in placeholder
-    document.getElementById('passkey-btn').addEventListener('click', () => {
-      alert(
-        'Passkey sign-in requires the @authsignal/browser SDK.\n\n' +
-        'In production, this would call:\n' +
-        'authsignal.passkey.signIn({ action: "signIn" })\n\n' +
-        'See the README for full client-side integration details.'
-      );
+    // Passkey sign-in
+    document.getElementById('passkey-btn').addEventListener('click', async function() {
+      var btn = document.getElementById('passkey-btn');
+      btn.disabled = true;
+      btn.textContent = 'Authenticating...';
+
+      try {
+        var result = await authsignal.passkey.signIn({
+          action: 'signIn',
+        });
+
+        if (result.token) {
+          // Send token to backend for validation and session creation
+          var res = await fetch('/demo/passkey-callback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: result.token }),
+          });
+          var data = await res.json();
+
+          if (data.success) {
+            window.location.href = '/dashboard.html';
+          } else {
+            var banner = document.getElementById('error-banner');
+            banner.textContent = data.error || 'Passkey verification failed';
+            banner.style.display = 'block';
+          }
+        }
+      } catch (err) {
+        // User cancelled or passkey not available
+        if (err.code !== 'ERROR_CEREMONY_ABORTED') {
+          var banner = document.getElementById('error-banner');
+          banner.textContent = 'Passkey sign-in failed: ' + (err.message || 'Unknown error');
+          banner.style.display = 'block';
+        }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sign in with Passkey';
+      }
     });
   </script>
 </body>

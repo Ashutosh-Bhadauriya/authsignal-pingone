@@ -3,7 +3,7 @@
  *
  * A working demo showing the full PingOne + Authsignal integration:
  * 1. Login via PingOne (OIDC auth code flow with PKCE)
- * 2. MFA step-up via Authsignal (track → challenge → validate)
+ * 2. MFA step-up via Authsignal (track -> challenge -> validate)
  * 3. Passwordless passkey login via Authsignal
  * 4. MFA settings management
  */
@@ -12,7 +12,7 @@ import { Router, type Request, type Response } from "express";
 import { config } from "../config.js";
 import * as pingoneService from "../services/pingone.js";
 import * as authsignalService from "../services/authsignal.js";
-import { sessionStore } from "../middleware/auth.js";
+import { requireSession, sessionStore } from "../middleware/auth.js";
 import {
   generateState,
   generateNonce,
@@ -24,13 +24,28 @@ import type { AppSession } from "../types/index.js";
 
 const router = Router();
 
+const MAX_LOGIN_FLOWS = 10_000;
+const MAX_PENDING_MFA = 10_000;
+
 // In-memory PKCE store for login flows (use Redis in production)
 const loginFlows = new Map<
   string,
   { codeVerifier: string; nonce: string; createdAt: number }
 >();
 
-// Cleanup expired login flows
+// Pending MFA sessions - stores user context until MFA completes.
+// Sessions are NOT created until MFA succeeds (prevents MFA bypass).
+const pendingMfa = new Map<
+  string,
+  {
+    userId: string;
+    email?: string;
+    displayName?: string;
+    createdAt: number;
+  }
+>();
+
+// Cleanup expired entries
 setInterval(() => {
   const now = Date.now();
   for (const [key, flow] of loginFlows) {
@@ -38,13 +53,32 @@ setInterval(() => {
       loginFlows.delete(key);
     }
   }
+  for (const [key, pending] of pendingMfa) {
+    if (now - pending.createdAt > 10 * 60 * 1000) {
+      pendingMfa.delete(key);
+    }
+  }
 }, 5 * 60 * 1000);
+
+function setSessionCookie(res: Response, sessionId: string): void {
+  res.cookie("session_id", sessionId, {
+    httpOnly: true,
+    secure: config.app.baseUrl.startsWith("https"),
+    sameSite: "lax",
+    maxAge: config.app.sessionMaxAge * 1000,
+  });
+}
 
 /**
  * GET /demo/login
  * Redirects the user to PingOne for authentication.
  */
 router.get("/login", (_req: Request, res: Response) => {
+  if (loginFlows.size >= MAX_LOGIN_FLOWS) {
+    res.status(503).json({ error: "Service temporarily at capacity" });
+    return;
+  }
+
   const state = generateState();
   const nonce = generateNonce();
   const codeVerifier = generateCodeVerifier();
@@ -95,11 +129,26 @@ router.get("/callback", async (req: Request, res: Response) => {
       codeVerifier: flow.codeVerifier,
     });
 
-    // Verify the ID token
-    const idClaims = await pingoneService.verifyIdToken(tokens.id_token);
+    // Verify the ID token with nonce validation
+    const idClaims = await pingoneService.verifyIdToken(
+      tokens.id_token,
+      flow.nonce
+    );
     const userId = idClaims.sub!;
     const email = (idClaims as any).email as string | undefined;
     const name = (idClaims as any).name as string | undefined;
+
+    // Auto-enroll the user's PingOne email as an EMAIL_OTP authenticator
+    // if they don't have any authenticators yet
+    const user = await authsignalService.getUser(userId);
+    if (!user.isEnrolled && email) {
+      await authsignalService.enrollVerifiedAuthenticator({
+        userId,
+        verificationMethod: authsignalService.AuthsignalVerificationMethod.EMAIL_OTP,
+        email,
+        isDefault: true,
+      });
+    }
 
     // Now initiate Authsignal MFA step-up
     const mfaResult = await authsignalService.trackAction({
@@ -112,33 +161,27 @@ router.get("/callback", async (req: Request, res: Response) => {
     });
 
     if (mfaResult.state === "CHALLENGE_REQUIRED" && mfaResult.url) {
-      // Store partial session - MFA not yet verified
-      const sessionId = generateSessionId();
-      sessionStore.set(sessionId, {
+      if (pendingMfa.size >= MAX_PENDING_MFA) {
+        res.redirect(`/?error=${encodeURIComponent("Service at capacity")}`);
+        return;
+      }
+
+      // Store pending MFA context - NO session created yet.
+      // The session is only created after MFA succeeds.
+      pendingMfa.set(mfaResult.idempotencyKey, {
         userId,
-        pingOneUserId: userId,
         email,
         displayName: name,
-        mfaVerified: false,
-        authenticatedAt: Date.now(),
-        expiresAt: Date.now() + config.app.sessionMaxAge * 1000,
-        _mfaToken: mfaResult.token,
+        createdAt: Date.now(),
       });
 
-      res.cookie("session_id", sessionId, {
-        httpOnly: true,
-        secure: config.app.baseUrl.startsWith("https"),
-        sameSite: "lax",
-        maxAge: config.app.sessionMaxAge * 1000,
-      });
-
-      // Redirect to Authsignal pre-built UI for MFA
+      // Redirect to Authsignal pre-built UI for enrollment or MFA challenge
       res.redirect(mfaResult.url);
     } else if (
       mfaResult.state === "ALLOW" ||
       mfaResult.state === "CHALLENGE_SUCCEEDED"
     ) {
-      // MFA not required or already succeeded (e.g., rules allow)
+      // MFA not required and user is already enrolled (rules allow)
       const sessionId = generateSessionId();
       const session: AppSession = {
         userId,
@@ -150,20 +193,13 @@ router.get("/callback", async (req: Request, res: Response) => {
         expiresAt: Date.now() + config.app.sessionMaxAge * 1000,
       };
       sessionStore.set(sessionId, session);
-
-      res.cookie("session_id", sessionId, {
-        httpOnly: true,
-        secure: config.app.baseUrl.startsWith("https"),
-        sameSite: "lax",
-        maxAge: config.app.sessionMaxAge * 1000,
-      });
-
+      setSessionCookie(res, sessionId);
       res.redirect("/dashboard.html");
     } else {
       res.redirect(`/?error=${encodeURIComponent("Authentication blocked")}`);
     }
   } catch (error) {
-    console.error("Demo callback error:", error);
+    console.error("Demo callback error:", (error as Error).message);
     res.redirect(`/?error=${encodeURIComponent("Authentication failed")}`);
   }
 });
@@ -171,7 +207,7 @@ router.get("/callback", async (req: Request, res: Response) => {
 /**
  * GET /demo/mfa-callback
  * Authsignal redirects here after MFA challenge completion.
- * Validates the token and upgrades the session.
+ * Validates the token and creates a new session only if MFA succeeded.
  */
 router.get("/mfa-callback", async (req: Request, res: Response) => {
   try {
@@ -191,22 +227,83 @@ router.get("/mfa-callback", async (req: Request, res: Response) => {
       return;
     }
 
-    // Find and upgrade the existing session
-    const sessionId = req.cookies?.["session_id"];
-    if (sessionId) {
-      const session = sessionStore.get(sessionId);
-      if (session) {
-        session.mfaVerified = true;
-        session.mfaMethod = validation.verificationMethod;
-        delete session._mfaToken;
-        sessionStore.set(sessionId, session);
-      }
+    // Look up the pending MFA context using the idempotency key
+    const pending = pendingMfa.get(validation.idempotencyKey);
+    if (!pending) {
+      res.redirect(`/?error=${encodeURIComponent("MFA session expired")}`);
+      return;
     }
+    pendingMfa.delete(validation.idempotencyKey);
+
+    // Verify the validated userId matches the pending user (prevents cross-user MFA swap)
+    if (validation.userId && validation.userId !== pending.userId) {
+      res.redirect(`/?error=${encodeURIComponent("User mismatch")}`);
+      return;
+    }
+
+    // NOW create the session - MFA is verified
+    const sessionId = generateSessionId();
+    const session: AppSession = {
+      userId: pending.userId,
+      pingOneUserId: pending.userId,
+      email: pending.email,
+      displayName: pending.displayName,
+      mfaVerified: true,
+      mfaMethod: validation.verificationMethod,
+      authenticatedAt: Date.now(),
+      expiresAt: Date.now() + config.app.sessionMaxAge * 1000,
+    };
+    sessionStore.set(sessionId, session);
+    setSessionCookie(res, sessionId);
 
     res.redirect("/dashboard.html");
   } catch (error) {
-    console.error("MFA callback error:", error);
+    console.error("MFA callback error:", (error as Error).message);
     res.redirect(`/?error=${encodeURIComponent("MFA validation failed")}`);
+  }
+});
+
+/**
+ * POST /demo/passkey-callback
+ * Validates a passkey sign-in token from the Authsignal browser SDK.
+ * Creates a session directly (no PingOne involved - pure passwordless).
+ */
+router.post("/passkey-callback", async (req: Request, res: Response) => {
+  try {
+    const { token } = req.body as { token?: string };
+    if (!token) {
+      res.status(400).json({ success: false, error: "Missing token" });
+      return;
+    }
+
+    const validation = await authsignalService.validateChallenge(token);
+
+    if (!validation.isValid || !validation.userId) {
+      res.status(401).json({ success: false, error: "Passkey verification failed" });
+      return;
+    }
+
+    // Get user info from Authsignal
+    const user = await authsignalService.getUser(validation.userId);
+
+    const sessionId = generateSessionId();
+    const session: AppSession = {
+      userId: validation.userId,
+      pingOneUserId: validation.userId,
+      email: user.email,
+      displayName: user.displayName,
+      mfaVerified: true,
+      mfaMethod: validation.verificationMethod,
+      authenticatedAt: Date.now(),
+      expiresAt: Date.now() + config.app.sessionMaxAge * 1000,
+    };
+    sessionStore.set(sessionId, session);
+    setSessionCookie(res, sessionId);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Passkey callback error:", (error as Error).message);
+    res.status(500).json({ success: false, error: "Passkey verification failed" });
   }
 });
 
@@ -243,19 +340,9 @@ router.get("/session", (req: Request, res: Response) => {
  * POST /demo/mfa-settings
  * Initiates the Authsignal settings flow for managing authenticators.
  */
-router.post("/mfa-settings", async (req: Request, res: Response) => {
+router.post("/mfa-settings", requireSession, async (req: Request, res: Response) => {
   try {
-    const sessionId = req.cookies?.["session_id"];
-    if (!sessionId) {
-      res.status(401).json({ error: "Not authenticated" });
-      return;
-    }
-
-    const session = sessionStore.get(sessionId);
-    if (!session) {
-      res.status(401).json({ error: "Not authenticated" });
-      return;
-    }
+    const session = (req as any).appSession as AppSession;
 
     const result = await authsignalService.trackAction({
       userId: session.userId,
@@ -263,6 +350,7 @@ router.post("/mfa-settings", async (req: Request, res: Response) => {
       attributes: {
         redirectUrl: `${config.app.baseUrl}/dashboard.html`,
         email: session.email,
+        redirectToSettings: true,
       },
     });
 
@@ -271,13 +359,15 @@ router.post("/mfa-settings", async (req: Request, res: Response) => {
       token: result.token,
     });
   } catch (error) {
-    console.error("MFA settings error:", error);
+    console.error("MFA settings error:", (error as Error).message);
     res.status(500).json({ error: "Failed to load MFA settings" });
   }
 });
 
 /**
  * POST /demo/logout
+ * Clears the local session and returns the PingOne signoff URL
+ * so the frontend can also end the PingOne SSO session.
  */
 router.post("/logout", (req: Request, res: Response) => {
   const sessionId = req.cookies?.["session_id"];
@@ -285,7 +375,12 @@ router.post("/logout", (req: Request, res: Response) => {
     sessionStore.delete(sessionId);
   }
   res.clearCookie("session_id");
-  res.json({ success: true });
+
+  // Build PingOne signoff URL to end the SSO session
+  const { environmentId, authBaseUrl } = config.pingone;
+  const pingOneSignoffUrl = `${authBaseUrl}/${environmentId}/as/signoff?post_logout_redirect_uri=${encodeURIComponent(config.app.baseUrl)}`;
+
+  res.json({ success: true, signoffUrl: pingOneSignoffUrl });
 });
 
 export default router;

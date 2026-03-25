@@ -30,6 +30,7 @@ export interface TrackActionRequest {
     userAgent?: string;
     deviceId?: string;
     custom?: Record<string, unknown>;
+    redirectToSettings?: boolean;
   };
 }
 
@@ -118,8 +119,8 @@ export interface DaVinciMfaInitResponse {
 
 export interface DaVinciMfaVerifyRequest {
   token: string;
-  userId?: string;
-  action?: string;
+  userId: string;
+  action: string;
 }
 
 export interface DaVinciMfaVerifyResponse {

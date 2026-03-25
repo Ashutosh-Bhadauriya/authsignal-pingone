@@ -87,13 +87,15 @@ export async function getUserByEmail(email: string): Promise<PingOneUser | null>
 // ─── Token Validation ───────────────────────────────────────────────────────
 
 export async function verifyIdToken(
-  idToken: string
+  idToken: string,
+  nonce?: string
 ): Promise<jose.JWTPayload> {
   return verifyPingOneIdToken(
     idToken,
     config.pingone.authBaseUrl,
     config.pingone.environmentId,
-    config.pingone.clientId
+    config.pingone.clientId,
+    nonce
   );
 }
 
@@ -146,16 +148,20 @@ export async function exchangeCode(params: {
   const { environmentId, clientId, clientSecret, authBaseUrl } = config.pingone;
   const tokenUrl = `${authBaseUrl}/${environmentId}/as/token`;
 
+  // PingOne uses Client Secret Basic auth (credentials in Authorization header)
+  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+
   const response = await fetch(tokenUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${basicAuth}`,
+    },
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code: params.code,
       redirect_uri: params.redirectUri,
       code_verifier: params.codeVerifier,
-      client_id: clientId,
-      client_secret: clientSecret,
     }).toString(),
   });
 

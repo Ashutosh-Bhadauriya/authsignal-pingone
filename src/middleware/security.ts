@@ -6,11 +6,11 @@ export const securityHeaders: RequestHandler = helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "https://*.authsignal.com", "https://*.pingone.com"],
+      connectSrc: ["'self'", "https://*.authsignal.com", "https://*.pingone.com", "https://cdn.jsdelivr.net"],
       frameSrc: ["'self'", "https://*.authsignal.com"],
     },
   },

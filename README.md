@@ -143,6 +143,7 @@ Initiates the Authsignal MFA challenge via OIDC.
 | `id_token_hint` | string | No | PingOne ID token (extracts user_id/email) |
 
 *Either `user_id` or `id_token_hint` with a `sub` claim is required.
+If `flow_id` is supplied, `id_token_hint` is also required and the bridge will ignore conflicting unsigned identity values.
 
 #### `GET /oidc/callback`
 
@@ -184,7 +185,9 @@ Response:
 
 ```json
 {
-  "token": "string (required)"
+  "token": "string (required)",
+  "userId": "string (required)",
+  "action": "string (required)"
 }
 ```
 
@@ -241,6 +244,7 @@ Initiates passwordless (passkey) authentication.
 - [ ] Replace in-memory session store with Redis/database
 - [ ] Replace in-memory OIDC bridge session store with Redis
 - [ ] Set `APP_BASE_URL` to your production HTTPS URL
+- [ ] Set `TRUST_PROXY` to match your reverse-proxy topology in production
 - [ ] Use a strong random value for `SESSION_SECRET`
 - [ ] Use a strong random value for `DAVINCI_BRIDGE_API_KEY`
 - [ ] Configure Authsignal redirect URLs in the dashboard
