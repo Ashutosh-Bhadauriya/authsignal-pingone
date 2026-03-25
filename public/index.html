@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authsignal + PingOne Integration Demo</title>
+  <style>
+    :root {
+      --ping-red: #b5121b;
+      --authsignal-blue: #3b52e5;
+      --bg: #f8f9fa;
+      --card-bg: #ffffff;
+      --text: #1a1a2e;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 520px;
+      width: 100%;
+    }
+    .logos {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .logo {
+      font-size: 1.25rem;
+      font-weight: 700;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      color: white;
+    }
+    .logo-ping { background: var(--ping-red); }
+    .logo-authsignal { background: var(--authsignal-blue); }
+    .logo-plus { color: var(--muted); font-size: 1.5rem; font-weight: 300; }
+    .card {
+      background: var(--card-bg);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      padding: 2.5rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    h1 { font-size: 1.5rem; text-align: center; margin-bottom: 0.5rem; }
+    .subtitle {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+      line-height: 1.5;
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 0.875rem 1.5rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn-primary {
+      background: var(--authsignal-blue);
+      color: white;
+      margin-bottom: 0.75rem;
+    }
+    .btn-secondary {
+      background: var(--ping-red);
+      color: white;
+      margin-bottom: 0.75rem;
+    }
+    .btn-outline {
+      background: transparent;
+      border: 1.5px solid var(--border);
+      color: var(--text);
+    }
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin: 1.5rem 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    .error-banner {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      font-size: 0.875rem;
+      display: none;
+    }
+    .features {
+      margin-top: 2rem;
+      padding: 1.5rem;
+      background: var(--bg);
+      border-radius: 8px;
+    }
+    .features h3 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+    .feature-list { list-style: none; }
+    .feature-list li {
+      padding: 0.375rem 0;
+      font-size: 0.875rem;
+      color: var(--text);
+    }
+    .feature-list li::before {
+      content: '\2713';
+      color: #10b981;
+      font-weight: 700;
+      margin-right: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logos">
+      <span class="logo logo-ping">PingOne</span>
+      <span class="logo-plus">+</span>
+      <span class="logo logo-authsignal">Authsignal</span>
+    </div>
+
+    <div class="card">
+      <h1>MFA & Passwordless Demo</h1>
+      <p class="subtitle">
+        Sign in with PingOne, secured with Authsignal MFA.<br>
+        Or go passwordless with passkeys.
+      </p>
+
+      <div class="error-banner" id="error-banner"></div>
+
+      <a href="/demo/login" class="btn btn-secondary">
+        Sign in with PingOne
+      </a>
+
+      <div class="divider">or</div>
+
+      <button class="btn btn-primary" id="passkey-btn" type="button">
+        Sign in with Passkey
+      </button>
+
+      <div class="features">
+        <h3>This demo shows</h3>
+        <ul class="feature-list">
+          <li>PingOne OIDC login with PKCE</li>
+          <li>Authsignal MFA step-up (SMS, TOTP, passkeys)</li>
+          <li>Passwordless passkey authentication</li>
+          <li>Adaptive risk-based MFA rules</li>
+          <li>MFA authenticator self-service</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Show error if redirected with error param
+    const params = new URLSearchParams(window.location.search);
+    const error = params.get('error');
+    if (error) {
+      const banner = document.getElementById('error-banner');
+      banner.textContent = decodeURIComponent(error);
+      banner.style.display = 'block';
+      history.replaceState(null, '', '/');
+    }
+
+    // Check if already authenticated
+    fetch('/demo/session')
+      .then(r => r.json())
+      .then(data => {
+        if (data.authenticated) {
+          window.location.href = '/dashboard.html';
+        }
+      })
+      .catch(() => {});
+
+    // Passkey sign-in placeholder
+    document.getElementById('passkey-btn').addEventListener('click', () => {
+      alert(
+        'Passkey sign-in requires the @authsignal/browser SDK.\n\n' +
+        'In production, this would call:\n' +
+        'authsignal.passkey.signIn({ action: "signIn" })\n\n' +
+        'See the README for full client-side integration details.'
+      );
+    });
+  </script>
+</body>
+</html>

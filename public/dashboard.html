@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - Authsignal + PingOne</title>
+  <style>
+    :root {
+      --authsignal-blue: #3b52e5;
+      --ping-red: #b5121b;
+      --bg: #f8f9fa;
+      --card-bg: #ffffff;
+      --text: #1a1a2e;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --success: #10b981;
+      --warning: #f59e0b;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .container { max-width: 640px; margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+    header h1 { font-size: 1.25rem; }
+    .btn {
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn-danger { background: var(--ping-red); color: white; }
+    .btn-primary { background: var(--authsignal-blue); color: white; }
+    .card {
+      background: var(--card-bg);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .card h2 {
+      font-size: 1rem;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .badge-success { background: #d1fae5; color: #065f46; }
+    .badge-warning { background: #fef3c7; color: #92400e; }
+    .info-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.5rem 1rem;
+      font-size: 0.875rem;
+    }
+    .info-label { color: var(--muted); font-weight: 500; }
+    .info-value { font-weight: 400; }
+    .loading {
+      text-align: center;
+      color: var(--muted);
+      padding: 4rem 0;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="loading" id="loading">Loading session...</div>
+
+    <div id="dashboard" style="display:none;">
+      <header>
+        <h1>Dashboard</h1>
+        <button class="btn btn-danger" onclick="logout()">Sign Out</button>
+      </header>
+
+      <div class="card">
+        <h2>
+          Session
+          <span class="badge" id="mfa-badge"></span>
+        </h2>
+        <div class="info-grid">
+          <span class="info-label">User ID</span>
+          <span class="info-value" id="user-id">-</span>
+
+          <span class="info-label">Email</span>
+          <span class="info-value" id="email">-</span>
+
+          <span class="info-label">Display Name</span>
+          <span class="info-value" id="display-name">-</span>
+
+          <span class="info-label">MFA Method</span>
+          <span class="info-value" id="mfa-method">-</span>
+
+          <span class="info-label">Authenticated At</span>
+          <span class="info-value" id="auth-time">-</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>MFA Settings</h2>
+        <p style="font-size: 0.875rem; color: var(--muted); margin-bottom: 1rem;">
+          Manage your authenticators: add passkeys, TOTP apps, phone numbers, and more.
+        </p>
+        <button class="btn btn-primary" onclick="openMfaSettings()">
+          Manage Authenticators
+        </button>
+      </div>
+
+      <div class="card">
+        <h2>Integration Info</h2>
+        <div class="info-grid">
+          <span class="info-label">IdP</span>
+          <span class="info-value">PingOne (OIDC + PKCE)</span>
+
+          <span class="info-label">MFA Provider</span>
+          <span class="info-value">Authsignal</span>
+
+          <span class="info-label">Pattern</span>
+          <span class="info-value">Step-up MFA after PingOne auth</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function loadSession() {
+      try {
+        const res = await fetch('/demo/session');
+        const data = await res.json();
+
+        if (!data.authenticated) {
+          window.location.href = '/';
+          return;
+        }
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('dashboard').style.display = 'block';
+
+        document.getElementById('user-id').textContent = data.userId || '-';
+        document.getElementById('email').textContent = data.email || '-';
+        document.getElementById('display-name').textContent = data.displayName || '-';
+        document.getElementById('mfa-method').textContent = data.mfaMethod || 'N/A';
+        document.getElementById('auth-time').textContent =
+          data.authenticatedAt ? new Date(data.authenticatedAt).toLocaleString() : '-';
+
+        const badge = document.getElementById('mfa-badge');
+        if (data.mfaVerified) {
+          badge.textContent = 'MFA Verified';
+          badge.className = 'badge badge-success';
+        } else {
+          badge.textContent = 'No MFA';
+          badge.className = 'badge badge-warning';
+        }
+      } catch {
+        window.location.href = '/';
+      }
+    }
+
+    async function openMfaSettings() {
+      try {
+        const res = await fetch('/demo/mfa-settings', { method: 'POST' });
+        const data = await res.json();
+
+        if (data.settingsUrl) {
+          window.location.href = data.settingsUrl;
+        } else {
+          alert('Could not load MFA settings. Please ensure you have Authsignal configured with the settings action.');
+        }
+      } catch (err) {
+        alert('Failed to open MFA settings: ' + err.message);
+      }
+    }
+
+    async function logout() {
+      await fetch('/demo/logout', { method: 'POST' });
+      window.location.href = '/';
+    }
+
+    loadSession();
+  </script>
+</body>
+</html>

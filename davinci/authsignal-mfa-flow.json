@@ -1,0 +1,173 @@
+{
+  "_comment": "DaVinci Flow Configuration - Authsignal MFA Step-up",
+  "_description": "Import this as a reference for building your DaVinci flow. The actual flow should be built in the DaVinci visual editor using these HTTP connector configurations.",
+  "flow": {
+    "name": "Authsignal MFA Step-up",
+    "description": "Adds Authsignal MFA after PingOne password authentication",
+    "nodes": [
+      {
+        "id": "start",
+        "type": "start",
+        "description": "Flow entry - user has completed PingOne password auth"
+      },
+      {
+        "id": "init-mfa",
+        "type": "httpConnector",
+        "description": "Call Authsignal to initiate MFA challenge",
+        "config": {
+          "method": "POST",
+          "url": "{{BRIDGE_BASE_URL}}/davinci/mfa/init",
+          "headers": {
+            "Content-Type": "application/json",
+            "X-API-Key": "{{DAVINCI_BRIDGE_API_KEY}}"
+          },
+          "body": {
+            "userId": "{{flow.userId}}",
+            "email": "{{flow.userEmail}}",
+            "action": "mfa",
+            "redirectUrl": "{{flow.resumeUrl}}",
+            "ipAddress": "{{flow.clientIp}}",
+            "userAgent": "{{flow.userAgent}}"
+          },
+          "responseSchema": {
+            "challengeRequired": "boolean",
+            "state": "string",
+            "challengeUrl": "string",
+            "token": "string",
+            "idempotencyKey": "string",
+            "isEnrolled": "boolean",
+            "enrolledMethods": "array"
+          }
+        }
+      },
+      {
+        "id": "check-challenge",
+        "type": "decision",
+        "description": "Check if MFA challenge is required",
+        "config": {
+          "condition": "{{init-mfa.response.challengeRequired}} == true"
+        },
+        "branches": {
+          "true": "redirect-to-authsignal",
+          "false": "allow-through"
+        }
+      },
+      {
+        "id": "redirect-to-authsignal",
+        "type": "redirect",
+        "description": "Redirect user to Authsignal pre-built MFA UI",
+        "config": {
+          "url": "{{init-mfa.response.challengeUrl}}"
+        }
+      },
+      {
+        "id": "verify-mfa",
+        "type": "httpConnector",
+        "description": "Verify the MFA challenge result after user returns",
+        "config": {
+          "method": "POST",
+          "url": "{{BRIDGE_BASE_URL}}/davinci/mfa/verify",
+          "headers": {
+            "Content-Type": "application/json",
+            "X-API-Key": "{{DAVINCI_BRIDGE_API_KEY}}"
+          },
+          "body": {
+            "token": "{{flow.authsignalToken}}"
+          },
+          "responseSchema": {
+            "isValid": "boolean",
+            "state": "string",
+            "userId": "string",
+            "action": "string",
+            "verificationMethod": "string"
+          }
+        }
+      },
+      {
+        "id": "check-verified",
+        "type": "decision",
+        "description": "Check if MFA verification succeeded",
+        "config": {
+          "condition": "{{verify-mfa.response.isValid}} == true"
+        },
+        "branches": {
+          "true": "allow-through",
+          "false": "deny-access"
+        }
+      },
+      {
+        "id": "allow-through",
+        "type": "continue",
+        "description": "MFA passed - continue authentication flow"
+      },
+      {
+        "id": "deny-access",
+        "type": "error",
+        "description": "MFA failed - deny access",
+        "config": {
+          "message": "Multi-factor authentication failed"
+        }
+      }
+    ]
+  },
+  "passwordless_flow": {
+    "name": "Authsignal Passwordless Login",
+    "description": "Replaces password authentication with Authsignal passkeys",
+    "nodes": [
+      {
+        "id": "start",
+        "type": "start",
+        "description": "Flow entry - collect email/username"
+      },
+      {
+        "id": "collect-identifier",
+        "type": "form",
+        "description": "Show login form to collect email",
+        "config": {
+          "fields": [
+            { "name": "email", "type": "email", "label": "Email address", "required": true }
+          ]
+        }
+      },
+      {
+        "id": "init-passwordless",
+        "type": "httpConnector",
+        "description": "Call Authsignal to initiate passwordless auth",
+        "config": {
+          "method": "POST",
+          "url": "{{BRIDGE_BASE_URL}}/davinci/passwordless/init",
+          "headers": {
+            "Content-Type": "application/json",
+            "X-API-Key": "{{DAVINCI_BRIDGE_API_KEY}}"
+          },
+          "body": {
+            "email": "{{collect-identifier.email}}",
+            "redirectUrl": "{{flow.resumeUrl}}"
+          }
+        }
+      },
+      {
+        "id": "check-enrolled",
+        "type": "decision",
+        "description": "Check if user has passkeys enrolled",
+        "config": {
+          "condition": "{{init-passwordless.response.isEnrolled}} == true"
+        },
+        "branches": {
+          "true": "redirect-to-authsignal",
+          "false": "fallback-to-password"
+        }
+      },
+      {
+        "id": "redirect-to-authsignal",
+        "type": "redirect",
+        "description": "Redirect to Authsignal for passkey authentication"
+      },
+      {
+        "id": "fallback-to-password",
+        "type": "pingoneLogin",
+        "description": "Fall back to PingOne password auth if no passkeys"
+      }
+    ]
+  }
+}
