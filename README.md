@@ -24,33 +24,9 @@ This integration adds **Authsignal's MFA and passwordless capabilities** to **Pi
 
 ## Integration Patterns
 
-### Pattern 1: MFA Federation Bridge (Primary)
+### MFA Federation Bridge
 
 A redirect-based bridge that lets PingOne sign-on flows delegate the MFA step to Authsignal's OIDC-based MFA. The customer's app (or PingOne itself) redirects the browser to the bridge, the bridge orchestrates MFA through Authsignal's OIDC endpoints, then redirects back. The demo app uses this pattern — see the [full end-to-end flow diagram](#end-to-end-flow-demo-app) below.
-
-### Pattern 2: DaVinci API
-
-REST endpoints that PingOne DaVinci flows call via HTTP connector nodes. For customers using DaVinci's visual flow builder who prefer API calls over browser redirects.
-
-```mermaid
-sequenceDiagram
-    participant D as DaVinci Flow
-    participant S as Customer Server
-    participant A as Authsignal
-
-    D->>S: POST /davinci/mfa/init (X-API-Key)
-    S->>A: POST /users/{id}/actions/mfa
-    A-->>S: { state, challengeUrl, token }
-    S-->>D: { challengeRequired, challengeUrl }
-
-    Note over D: DaVinci redirects user → Authsignal MFA UI → user returns
-
-    D->>S: POST /davinci/mfa/verify (X-API-Key)
-    S->>A: POST /validate (token)
-    A-->>S: { isValid, userId, action }
-    S->>S: Verify userId + action match
-    S-->>D: { isValid, state, verificationMethod }
-```
 
 ---
 
@@ -232,7 +208,7 @@ Browser → redirect to Authsignal settings UI
 | API key brute force | HMAC timing-safe comparison (no length leak) |
 | Memory exhaustion | Bounded in-memory stores with TTL cleanup (sessions, login flows, bridge sessions) |
 | Credential exposure | Secrets server-side only, httpOnly cookies |
-| Open redirect | Redirect URL allowlist on DaVinci endpoints; same-origin check on bridge callback_url |
+| Open redirect | Redirect URL allowlist; same-origin check on bridge callback_url |
 | Input injection | Regex validation on userId, action, email, and flowId parameters |
 
 ### Why OIDC + PKCE (not SAML)
@@ -335,67 +311,6 @@ Initiates the Authsignal MFA challenge. Redirects the browser through Authsignal
 - `callback_url` + `callback_state` — App callback mode (redirects to your app with MFA result)
 - Neither — API mode (returns JSON)
 
-### DaVinci API Endpoints
-
-All endpoints require `X-API-Key` header.
-
-#### `POST /davinci/mfa/init`
-
-```json
-{
-  "userId": "string (required)",
-  "action": "string (default: mfa)",
-  "email": "string",
-  "phoneNumber": "string",
-  "ipAddress": "string",
-  "userAgent": "string",
-  "redirectUrl": "string (required)",
-  "custom": {}
-}
-```
-
-Response:
-```json
-{
-  "challengeRequired": true,
-  "state": "CHALLENGE_REQUIRED",
-  "challengeUrl": "https://...",
-  "token": "eyJ...",
-  "idempotencyKey": "...",
-  "isEnrolled": true,
-  "enrolledMethods": ["PASSKEY", "SMS"]
-}
-```
-
-#### `POST /davinci/mfa/verify`
-
-```json
-{
-  "token": "string (required)",
-  "userId": "string (required)",
-  "action": "string (required)"
-}
-```
-
-Response:
-```json
-{
-  "isValid": true,
-  "state": "CHALLENGE_SUCCEEDED",
-  "userId": "...",
-  "action": "mfa",
-  "verificationMethod": "PASSKEY"
-}
-```
-
-#### `GET /davinci/user/:userId/enrollment`
-
-Returns enrollment status and authenticators for a user.
-
-#### `POST /davinci/passwordless/init`
-
-Initiates passwordless (passkey) authentication.
-
 ### Environment Variables
 
 | Variable | Required | Default | Description |
@@ -410,6 +325,5 @@ Initiates passwordless (passkey) authentication.
 | `PORT` | No | `3000` | Server port |
 | `APP_BASE_URL` | No | `http://localhost:3000` | Public base URL of this server |
 | `SESSION_SECRET` | No | Auto-generated | Cookie signing secret (auto-generated if not set; sessions won't survive restarts) |
-| `DAVINCI_BRIDGE_API_KEY` | No | — | API key for DaVinci HTTP connector auth |
 | `TRUST_PROXY` | No | `false` | Express trust proxy setting |
 
