@@ -4,12 +4,12 @@ Add Authsignal MFA and passwordless authentication to PingOne (Ping Identity) lo
 
 ## What This Does
 
-This integration adds **Authsignal's MFA and passwordless capabilities** to **PingOne** authentication flows. A middleware server sits between PingOne (identity provider) and Authsignal (MFA provider) — PingOne handles "who are you?" and Authsignal handles "prove it's really you."
+This integration adds **Authsignal's MFA and passwordless capabilities** to **PingOne** authentication flows. A customer-deployed server sits between PingOne (identity provider) and Authsignal (MFA orchestrator) — PingOne handles "who are you?" and Authsignal handles "prove it's really you."
 
 ```
 ┌──────────┐      ┌──────────────┐      ┌─────────────┐      ┌─────────────┐
-│  Browser  │ ──── │  Our Server   │ ──── │   PingOne    │      │  Authsignal  │
-│           │      │  (Express)    │ ──── │  (Identity)  │      │  (MFA)       │
+│  Browser  │ ──── │  Customer     │ ──── │   PingOne    │      │  Authsignal  │
+│           │      │  Server       │ ──── │  (Identity)  │      │  (MFA)       │
 └──────────┘      └──────────────┘      └─────────────┘      └─────────────┘
 ```
 
@@ -24,192 +24,182 @@ This integration adds **Authsignal's MFA and passwordless capabilities** to **Pi
 
 ## Integration Patterns
 
-### Pattern 1: Demo App (Primary)
+### Pattern 1: MFA Federation Bridge (Primary)
 
-Full login flow with frontend. PingOne OIDC login with Authsignal MFA step-up.
+A redirect-based bridge that lets PingOne sign-on flows delegate the MFA step to Authsignal's OIDC-based MFA. The customer's app (or PingOne itself) redirects the browser to the bridge, the bridge orchestrates MFA through Authsignal's OIDC endpoints, then redirects back. The demo app uses this pattern — see the [full end-to-end flow diagram](#end-to-end-flow-demo-app) below.
 
-### Pattern 2: DaVinci API Bridge
+### Pattern 2: DaVinci API
 
-REST endpoints that PingOne DaVinci flows call via HTTP connector nodes. For orgs using DaVinci's visual flow builder.
+REST endpoints that PingOne DaVinci flows call via HTTP connector nodes. For customers using DaVinci's visual flow builder who prefer API calls over browser redirects.
 
-### Pattern 3: OIDC Bridge
+```mermaid
+sequenceDiagram
+    participant D as DaVinci Flow
+    participant S as Customer Server
+    participant A as Authsignal
 
-For PingOne sign-on policies that need Authsignal as an "External IdP" step. PingOne redirects to the bridge, which federates to Authsignal via OIDC, then returns the result to PingOne.
+    D->>S: POST /davinci/mfa/init (X-API-Key)
+    S->>A: POST /users/{id}/actions/mfa
+    A-->>S: { state, challengeUrl, token }
+    S-->>D: { challengeRequired, challengeUrl }
+
+    Note over D: DaVinci redirects user → Authsignal MFA UI → user returns
+
+    D->>S: POST /davinci/mfa/verify (X-API-Key)
+    S->>A: POST /validate (token)
+    A-->>S: { isValid, userId, action }
+    S->>S: Verify userId + action match
+    S-->>D: { isValid, state, verificationMethod }
+```
 
 ---
 
-## End-to-End Flow
+## End-to-End Flow (Demo App)
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant S as Server
+    participant P as PingOne
+    participant A as Authsignal
+
+    B->>S: GET /demo/login
+    S-->>B: 302 → PingOne /authorize (state, nonce, PKCE)
+
+    B->>P: User enters username + password
+    P-->>B: 302 → /demo/callback?code=…&state=…
+
+    B->>S: GET /demo/callback
+    S->>P: POST /as/token (code + code_verifier)
+    P-->>S: id_token + access_token
+    S->>S: Verify ID token (JWKS + nonce)
+
+    S->>A: GET /users/{userId} (check enrollment)
+    A-->>S: enrollment status
+    Note over S,A: Auto-enroll verified email as EMAIL_OTP if not enrolled
+
+    S->>S: Store pending login (callbackState)
+    S-->>B: 302 → /oidc/initiate
+
+    Note over B,A: ── MFA Federation Bridge ──
+
+    B->>S: GET /oidc/initiate
+    S->>A: POST /init-auth (userId, action)
+    A-->>S: { token }
+    S-->>B: 302 → Authsignal /oidc/auth (PKCE)
+
+    B->>A: User completes MFA
+    A-->>B: 302 → /oidc/callback?code=…
+
+    B->>S: GET /oidc/callback
+    S->>A: POST /oidc/token (code + verifier)
+    A-->>S: { id_token }
+    S->>S: Verify ID token (JWKS + nonce)
+    S-->>B: 302 → /demo/mfa-complete
+
+    Note over B,A: ── Session Creation ──
+
+    B->>S: GET /demo/mfa-complete
+    S->>S: Validate callbackState + userId match
+    S->>S: Create session (mfaVerified: true)
+    S-->>B: 302 → /dashboard.html (signed cookie set)
+```
 
 ### Step 1: User clicks "Sign in with PingOne"
 
+Server generates PKCE pair + state + nonce, redirects to PingOne:
 ```
-Browser → GET /demo/login → Our Server
-```
-
-Our server generates:
-- **state** — random string to prevent CSRF (stored server-side)
-- **nonce** — random string to prevent token replay (stored server-side)
-- **PKCE pair** — `code_verifier` (secret, stored server-side) and `code_challenge` (SHA-256 hash, sent to PingOne)
-
-Then redirects the browser to PingOne:
-```
-Browser → 302 → https://auth.pingone.com/{envId}/as/authorize
-  ?response_type=code
-  &client_id=...
-  &redirect_uri=http://localhost:3000/demo/callback
-  &scope=openid profile email
-  &state=abc123...
-  &nonce=xyz789...
-  &code_challenge=Hk7d...
-  &code_challenge_method=S256
+Browser → GET /demo/login
+  → 302 → PingOne /authorize?response_type=code&code_challenge=...&state=...&nonce=...
 ```
 
 ### Step 2: User authenticates with PingOne
 
-PingOne shows its login form. User enters username + password. PingOne validates credentials against its user directory.
-
-If valid, PingOne redirects back with a short-lived **authorization code**:
+PingOne shows its login form, validates credentials, redirects back:
 ```
-Browser → 302 → http://localhost:3000/demo/callback
-  ?code=a1b2c3...
-  &state=abc123...
+Browser → 302 → /demo/callback?code=a1b2c3...&state=abc123...
 ```
 
-### Step 3: Server exchanges the code for tokens
+### Step 3: Server exchanges code and verifies identity
 
 ```
-Our Server → POST https://auth.pingone.com/{envId}/as/token
-  Authorization: Basic base64(clientId:clientSecret)
-  Body: grant_type=authorization_code
-        &code=a1b2c3...
-        &redirect_uri=http://localhost:3000/demo/callback
-        &code_verifier=original_secret_value
+Server → POST PingOne /as/token (code + code_verifier)
+  → receives ID token + access token
+  → verifies ID token via JWKS (signature, issuer, audience, nonce, expiry)
+  → extracts: sub (user ID), email, email_verified, name
 ```
 
-PingOne verifies:
-- The code is valid and not expired
-- The `code_verifier` hashes to the `code_challenge` sent in step 1 (**PKCE**)
-- The `redirect_uri` matches
-- The `client_secret` is correct
+### Step 4: Auto-enroll email if user is new to Authsignal
 
-Returns an ID token and access token.
-
-### Step 4: Server verifies the PingOne ID token
-
-Fetches PingOne's public keys (JWKS) and cryptographically verifies:
-- The **signature** is valid (token wasn't tampered with)
-- The **issuer** matches PingOne
-- The **audience** matches our client ID
-- The **nonce** matches what we stored (prevents replay)
-- The token **hasn't expired**
-
-From the verified token we extract: `sub` (user ID), `email`, `name`.
-
-### Step 5: Auto-enroll email if user is new to Authsignal
-
+If the user has no authenticators and `email_verified === true`:
 ```
-Our Server → GET https://api.authsignal.com/v1/users/{userId}
+Server → POST Authsignal /users/{userId}/authenticators
+  → enrolls PingOne-verified email as EMAIL_OTP
 ```
 
-Checks if the user has any authenticators enrolled. If not:
+### Step 5: Redirect to the MFA federation bridge
 
+Server stores pending login context (keyed by a one-time `callback_state` token). **No session is created yet.**
 ```
-Our Server → POST https://api.authsignal.com/v1/users/{userId}/authenticators
-  Body: {
-    "verificationMethod": "EMAIL_OTP",
-    "email": "user@example.com",
-    "isDefault": true
-  }
+Browser → 302 → /oidc/initiate?user_id=...&email=...&action=signIn
+    &callback_url=/demo/mfa-complete&callback_state=<random>
 ```
 
-This enrolls their PingOne-verified email as an EMAIL_OTP authenticator so they can be challenged immediately without manual enrollment.
-
-### Step 6: Track the sign-in action with Authsignal
+### Step 6: Bridge initiates Authsignal OIDC MFA
 
 ```
-Our Server → POST https://api.authsignal.com/v1/users/{userId}/actions/signIn
-  Body: {
-    "redirectUrl": "http://localhost:3000/demo/mfa-callback",
-    "email": "user@example.com"
-  }
+Bridge → POST Authsignal /init-auth (userId, action, email)
+  → receives scoped token
+  → 302 → Authsignal /oidc/auth?token=...&code_challenge=...&state=...&nonce=...
 ```
 
-Authsignal's **rules engine** evaluates the action and returns:
+### Step 7: User completes MFA challenge
 
-```json
-{
-  "state": "CHALLENGE_REQUIRED",
-  "url": "https://mfa.authsignal.com/challenge?token=eyJ...",
-  "idempotencyKey": "47cd0b03-...",
-  "isEnrolled": true
-}
+Authsignal shows the challenge UI (passkey, email OTP, TOTP, etc.). On success:
+```
+Browser → 302 → /oidc/callback?code=...&state=...
 ```
 
-### Step 7: Store pending MFA context and redirect
-
-Our server stores the user context in a pending MFA map (keyed by `idempotencyKey`). **No session is created yet** — the session only exists after MFA succeeds. This prevents MFA bypass.
-
-Then redirects the browser to Authsignal's pre-built MFA UI:
-```
-Browser → 302 → https://mfa.authsignal.com/challenge?token=eyJ...
-```
-
-### Step 8: User completes MFA challenge
-
-Authsignal's pre-built UI:
-1. Shows the challenge screen (email OTP input)
-2. Sends an OTP code to the user's email
-3. User enters the code
-4. Authsignal verifies it
-
-On success, Authsignal redirects back:
-```
-Browser → 302 → http://localhost:3000/demo/mfa-callback?token=eyJ...
-```
-
-### Step 9: Server validates the MFA result
+### Step 8: Bridge verifies the MFA result
 
 ```
-Our Server → POST https://api.authsignal.com/v1/validate
-  Body: { "token": "eyJ..." }
+Bridge → POST Authsignal /oidc/token (code + code_verifier)
+  → receives ID token
+  → verifies via JWKS (signature, issuer, audience, nonce)
+  → reads action_state, action_code, action_verification_method claims
+  → confirms action_state === CHALLENGE_SUCCEEDED
+  → confirms sub matches expected userId, action_code matches expected action
 ```
 
-Authsignal returns:
-```json
-{
-  "isValid": true,
-  "state": "CHALLENGE_SUCCEEDED",
-  "userId": "fddb7b06-...",
-  "idempotencyKey": "47cd0b03-...",
-  "verificationMethod": "EMAIL_OTP"
-}
+### Step 9: Bridge redirects back to the app
+
+```
+Browser → 302 → /demo/mfa-complete?callback_state=<random>&success=true
+    &user_id=...&verification_method=PASSKEY
 ```
 
-Our server then:
-1. Looks up the pending MFA context by `idempotencyKey`
-2. **Verifies the userId matches** (prevents cross-user MFA swap attacks)
-3. Deletes the pending entry
-4. **Creates the session** with `mfaVerified: true`
-5. Sets an httpOnly session cookie
-6. Redirects to the dashboard
+### Step 10: App creates session
 
-### Step 10: Dashboard
-
-The dashboard JS calls `GET /demo/session`, gets the session info, and renders it showing the authenticated user with MFA status.
+Server validates the `callback_state` against the pending login, verifies `user_id` matches, creates the session:
+```
+Session created: { mfaVerified: true, mfaMethod: "PASSKEY" }
+  → signed httpOnly cookie set
+  → 302 → /dashboard.html
+```
 
 ---
 
 ## Sign Out Flow
 
 ```
-Browser → POST /demo/logout → Our Server
+Browser → POST /demo/logout → Server
   1. Deletes the server-side session
   2. Clears the session cookie
   3. Returns PingOne's signoff URL
 
 Browser → 302 → https://auth.pingone.com/{envId}/as/signoff
   1. PingOne kills its SSO session
-  2. Redirects back to our app
+  2. Redirects back to the app
 ```
 
 Next login will require both PingOne credentials AND Authsignal MFA again.
@@ -217,7 +207,7 @@ Next login will require both PingOne credentials AND Authsignal MFA again.
 ## MFA Settings Flow
 
 ```
-Browser → POST /demo/mfa-settings → Our Server
+Browser → POST /demo/mfa-settings → Server
   → Authsignal trackAction("manageSettings", { redirectToSettings: true })
   → Returns settings URL
 
@@ -233,15 +223,17 @@ Browser → redirect to Authsignal settings UI
 | Threat | Protection |
 |--------|-----------|
 | Code interception | PKCE — `code_verifier` never leaves server |
-| CSRF | State parameter validated on callback |
+| CSRF | State parameter validated on callback; Origin/Referer header check on POST endpoints |
 | Token replay | Nonce verified in ID token |
 | Token tampering | JWKS signature verification |
+| Cookie tampering | Session cookies are signed with `SESSION_SECRET` |
 | MFA bypass | Session only created after MFA succeeds |
 | Cross-user MFA swap | userId matched between pending context and MFA result |
 | API key brute force | HMAC timing-safe comparison (no length leak) |
-| Memory exhaustion | Bounded in-memory stores with TTL cleanup |
+| Memory exhaustion | Bounded in-memory stores with TTL cleanup (sessions, login flows, bridge sessions) |
 | Credential exposure | Secrets server-side only, httpOnly cookies |
-| Open redirect | Redirect URL allowlist on DaVinci endpoints |
+| Open redirect | Redirect URL allowlist on DaVinci endpoints; same-origin check on bridge callback_url |
+| Input injection | Regex validation on userId, action, email, and flowId parameters |
 
 ### Why OIDC + PKCE (not SAML)
 
@@ -286,7 +278,7 @@ npm start      # Start production server
 2. Go to **Settings → API Keys** and copy:
    - **Tenant ID** → `AUTHSIGNAL_TENANT_ID`
    - **Secret Key** → `AUTHSIGNAL_SECRET`
-3. Note your region (US/EU/AU/CA) and set the matching API/OIDC URLs
+3. Set `AUTHSIGNAL_REGION` to match your tenant region (`us`, `eu`, `au`, or `ca`)
 4. Configure the `signIn` action with a rule set to **"Always challenge"**
 5. Create a `manageSettings` action for authenticator self-service
 
@@ -295,15 +287,16 @@ npm start      # Start production server
 1. Log in to [PingOne Admin Console](https://console.pingone.com)
 2. Create an environment with **PingOne SSO** and **PingOne MFA** services
 3. Copy the **Environment ID** → `PINGONE_ENVIRONMENT_ID`
-4. Go to **Applications → Add Application → OIDC Web App**
-5. Configure:
+4. Set `PINGONE_REGION` to match your environment (`NA`, `EU`, `CA`, `AP`, or `AU`)
+5. Go to **Applications → Add Application → OIDC Web App**
+6. Configure:
    - **Redirect URI**: `http://localhost:3000/demo/callback`
    - **Signoff URL**: `http://localhost:3000`
    - **Grant Type**: Authorization Code
    - **Scopes**: openid, profile, email
-6. Copy **Client ID** and **Client Secret**
-7. **Enable** the application (toggle on)
-8. Create a test user under **Directory → Users**
+7. Copy **Client ID** and **Client Secret**
+8. **Enable** the application (toggle on)
+9. Create a test user under **Directory → Users**
 
 ## API Reference
 
@@ -312,18 +305,17 @@ npm start      # Start production server
 | Endpoint | Description |
 |----------|-------------|
 | `GET /demo/login` | Redirects to PingOne for login |
-| `GET /demo/callback` | PingOne callback → auto-enroll → Authsignal MFA |
-| `GET /demo/mfa-callback` | Authsignal MFA callback → create session |
-| `POST /demo/passkey-callback` | Validates passkey sign-in token |
+| `GET /demo/callback` | PingOne callback → auto-enroll → redirect to MFA bridge |
+| `GET /demo/mfa-complete` | Bridge redirects here after MFA → create session |
 | `GET /demo/session` | Current session info (JSON) |
 | `POST /demo/mfa-settings` | Opens Authsignal authenticator management |
 | `POST /demo/logout` | Ends local session + PingOne SSO session |
 
-### OIDC Bridge Endpoints
+### MFA Federation Bridge Endpoints
 
 #### `GET /oidc/initiate`
 
-Initiates the Authsignal MFA challenge via OIDC federation.
+Initiates the Authsignal MFA challenge. Redirects the browser through Authsignal's OIDC MFA flow, then back to the caller.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -331,11 +323,17 @@ Initiates the Authsignal MFA challenge via OIDC federation.
 | `email` | string | No | User's email |
 | `phone` | string | No | User's phone |
 | `action` | string | No | Authsignal action (default: `mfa`) |
-| `flow_id` | string | No | PingOne flow ID to resume after MFA |
+| `flow_id` | string | No | PingOne flow ID — redirects to PingOne `/as/resume` after MFA |
 | `id_token_hint` | string | No | PingOne ID token (extracts user_id/email) |
+| `callback_url` | string | No | App URL to redirect to after MFA (must be same-origin) |
+| `callback_state` | string | No | One-time CSRF token passed back to `callback_url` |
 
 *Either `user_id` or `id_token_hint` with a `sub` claim is required.
-If `flow_id` is supplied, `id_token_hint` is also required.
+
+**Redirect modes** (mutually exclusive):
+- `flow_id` + `id_token_hint` — PingOne resume mode (redirects to PingOne `/as/resume`)
+- `callback_url` + `callback_state` — App callback mode (redirects to your app with MFA result)
+- Neither — API mode (returns JSON)
 
 ### DaVinci API Endpoints
 
@@ -398,17 +396,20 @@ Returns enrollment status and authenticators for a user.
 
 Initiates passwordless (passkey) authentication.
 
-### Production Checklist
+### Environment Variables
 
-- [ ] Replace in-memory session store with Redis/database
-- [ ] Replace in-memory OIDC bridge session store with Redis
-- [ ] Set `APP_BASE_URL` to your production HTTPS URL
-- [ ] Set `TRUST_PROXY` to match your reverse-proxy topology
-- [ ] Use strong random values for `SESSION_SECRET` and `DAVINCI_BRIDGE_API_KEY`
-- [ ] Configure PingOne redirect URIs and signoff URLs
-- [ ] Enable HTTPS (terminate at load balancer or reverse proxy)
-- [ ] Set up monitoring/alerting on auth failure rates
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `AUTHSIGNAL_SECRET` | Yes | — | Authsignal API secret key |
+| `AUTHSIGNAL_TENANT_ID` | Yes | — | Authsignal tenant ID |
+| `AUTHSIGNAL_REGION` | No | `us` | Authsignal region (`us`, `eu`, `au`, `ca`) — sets API + OIDC URLs |
+| `PINGONE_ENVIRONMENT_ID` | Yes | — | PingOne environment ID |
+| `PINGONE_CLIENT_ID` | Yes | — | PingOne OIDC app client ID |
+| `PINGONE_CLIENT_SECRET` | Yes | — | PingOne OIDC app client secret |
+| `PINGONE_REGION` | No | `NA` | PingOne region (`NA`, `EU`, `CA`, `AP`, `AU`) — sets auth + API URLs |
+| `PORT` | No | `3000` | Server port |
+| `APP_BASE_URL` | No | `http://localhost:3000` | Public base URL of this server |
+| `SESSION_SECRET` | No | Auto-generated | Cookie signing secret (auto-generated if not set; sessions won't survive restarts) |
+| `DAVINCI_BRIDGE_API_KEY` | No | — | API key for DaVinci HTTP connector auth |
+| `TRUST_PROXY` | No | `false` | Express trust proxy setting |
 
-## License
-
-MIT

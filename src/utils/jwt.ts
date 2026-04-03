@@ -3,7 +3,7 @@ import * as jose from "jose";
 let pingOneJwks: ReturnType<typeof jose.createRemoteJWKSet> | null = null;
 let authsignalJwks: ReturnType<typeof jose.createRemoteJWKSet> | null = null;
 
-export function getPingOneJwks(
+function getPingOneJwks(
   authBaseUrl: string,
   environmentId: string
 ): ReturnType<typeof jose.createRemoteJWKSet> {
@@ -17,7 +17,7 @@ export function getPingOneJwks(
   return pingOneJwks;
 }
 
-export function getAuthsignalJwks(
+function getAuthsignalJwks(
   oidcUrl: string
 ): ReturnType<typeof jose.createRemoteJWKSet> {
   if (!authsignalJwks) {
@@ -54,42 +54,6 @@ export async function verifyPingOneIdToken(
   return payload;
 }
 
-export async function verifyPingOneAccessToken(
-  accessToken: string,
-  authBaseUrl: string,
-  environmentId: string
-): Promise<jose.JWTPayload> {
-  const jwks = getPingOneJwks(authBaseUrl, environmentId);
-  const issuer = `${authBaseUrl}/${environmentId}/as`;
-
-  const { payload } = await jose.jwtVerify(accessToken, jwks, {
-    issuer,
-    clockTolerance: 30,
-  });
-
-  return payload;
-}
-
-/**
- * Verify an Authsignal OIDC access token using JWKS.
- * This cryptographically validates the token before trusting its claims.
- */
-export async function verifyAuthsignalToken(
-  accessToken: string,
-  oidcUrl: string,
-  tenantId: string
-): Promise<jose.JWTPayload> {
-  const jwks = getAuthsignalJwks(oidcUrl);
-
-  const { payload } = await jose.jwtVerify(accessToken, jwks, {
-    issuer: getAuthsignalIssuer(oidcUrl),
-    audience: tenantId,
-    clockTolerance: 30,
-  });
-
-  return payload;
-}
-
 export async function verifyAuthsignalIdToken(
   idToken: string,
   oidcUrl: string,
@@ -111,10 +75,3 @@ export async function verifyAuthsignalIdToken(
   return payload;
 }
 
-export function decodeTokenUnsafe(token: string): jose.JWTPayload | null {
-  try {
-    return jose.decodeJwt(token);
-  } catch {
-    return null;
-  }
-}

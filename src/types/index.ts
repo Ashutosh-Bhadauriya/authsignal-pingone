@@ -54,46 +54,6 @@ export interface ValidateChallengeResponse {
   verificationMethod?: VerificationMethod;
 }
 
-// ─── PingOne Types ──────────────────────────────────────────────────────────
-
-export interface PingOneTokenPayload {
-  iss: string;
-  sub: string;
-  aud: string;
-  exp: number;
-  iat: number;
-  auth_time?: number;
-  at_hash?: string;
-  acr?: string;
-  amr?: string[];
-  env: string;
-  org: string;
-  "p1.region"?: string;
-}
-
-export interface PingOneUser {
-  id: string;
-  environment: { id: string };
-  username: string;
-  email?: string;
-  name?: {
-    given?: string;
-    family?: string;
-  };
-  phone?: string;
-  mfaEnabled?: boolean;
-}
-
-export type PingOneFlowStatus =
-  | "USERNAME_PASSWORD_REQUIRED"
-  | "PASSWORD_REQUIRED"
-  | "DEVICE_SELECTION_REQUIRED"
-  | "OTP_REQUIRED"
-  | "PUSH_CONFIRMATION_REQUIRED"
-  | "EXTERNAL_AUTHENTICATION_REQUIRED"
-  | "COMPLETED"
-  | "FAILED";
-
 // ─── DaVinci Bridge Types ───────────────────────────────────────────────────
 
 export interface DaVinciMfaInitRequest {
@@ -139,8 +99,43 @@ export interface OidcBridgeSession {
   codeVerifier: string;
   pingOneUserId: string;
   pingOneSessionId?: string;
+  callbackUrl?: string;
+  callbackState?: string;
   action: string;
   redirectUri: string;
+  createdAt: number;
+}
+
+// ─── OIDC Provider Types ───────────────────────────────────────────────────
+
+export interface OidcProviderSession {
+  internalState: string;
+  internalNonce: string;
+  authsignalCodeVerifier: string;
+  authsignalRedirectUri: string;
+  davinciRedirectUri: string;
+  davinciState: string;
+  davinciNonce?: string;
+  davinciClientId: string;
+  davinciCodeChallenge?: string;
+  davinciCodeChallengeMethod?: string;
+  userId: string;
+  action: string;
+  email?: string;
+  createdAt: number;
+}
+
+export interface OidcProviderAuthorizationCode {
+  code: string;
+  userId: string;
+  action: string;
+  actionState: string;
+  verificationMethod?: string;
+  davinciRedirectUri: string;
+  davinciClientId: string;
+  davinciNonce?: string;
+  davinciCodeChallenge?: string;
+  davinciCodeChallengeMethod?: string;
   createdAt: number;
 }
 

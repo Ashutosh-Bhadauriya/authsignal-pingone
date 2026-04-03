@@ -35,7 +35,7 @@ export function requireSession(
   res: Response,
   next: NextFunction
 ): void {
-  const sessionId = req.cookies?.["session_id"];
+  const sessionId = req.signedCookies?.["session_id"];
   if (!sessionId) {
     res.status(401).json({ error: "Not authenticated" });
     return;
@@ -53,4 +53,15 @@ export function requireSession(
 }
 
 // In-memory session store (use Redis/DB in production)
+export const MAX_SESSIONS = 50_000;
 export const sessionStore = new Map<string, any>();
+
+// Clean up expired sessions every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, session] of sessionStore) {
+    if (session.expiresAt < now) {
+      sessionStore.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);

@@ -19,6 +19,7 @@ import { Router, type Request, type Response } from "express";
 import { config } from "../config.js";
 import { davinciApiKeyAuth } from "../middleware/auth.js";
 import * as authsignalService from "../services/authsignal.js";
+import { SAFE_IDENTIFIER_RE, SAFE_ACTION_RE } from "../utils/validation.js";
 import type {
   DaVinciMfaInitRequest,
   DaVinciMfaInitResponse,
@@ -27,28 +28,69 @@ import type {
 } from "../types/index.js";
 
 const router = Router();
-const SAFE_IDENTIFIER_RE = /^[a-zA-Z0-9_.@-]{1,128}$/;
-const SAFE_ACTION_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 // Allowlist of permitted redirect URL origins.
-// In production, configure via environment variable.
-function isAllowedRedirectUrl(url: string): boolean {
+// Derives PingOne origins from the configured region so EU/CA/AP/AU all work.
+function buildAllowedOrigins(): string[] {
+  const appOrigin = new URL(config.app.baseUrl).origin;
+  const pingOneDomain = new URL(config.pingone.authBaseUrl).hostname.replace("auth.", "");
+
+  return [
+    appOrigin,
+    `https://auth.${pingOneDomain}`,
+    `https://apps.${pingOneDomain}`,
+    `https://orchestrate-api.${pingOneDomain}`,
+  ];
+}
+
+function isAllowedRedirectOrigin(url: string): boolean {
   try {
     const parsed = new URL(url);
-    const appOrigin = new URL(config.app.baseUrl).origin;
-    const allowedOrigins = [
-      appOrigin,
-      "https://auth.pingone.com",
-      "https://apps.pingone.com",
-      "https://orchestrate-api.pingone.com",
-    ];
-    return allowedOrigins.some((origin) => parsed.origin === origin);
+    // Allow configured origins + any ngrok URL (for development)
+    if (allowedOrigins.some((origin) => parsed.origin === origin)) return true;
+    if (parsed.hostname.endsWith(".ngrok-free.dev")) return true;
+    return false;
   } catch {
     return false;
   }
 }
 
-// All DaVinci bridge endpoints require API key auth
+const allowedOrigins = buildAllowedOrigins();
+
+function isAllowedRedirectUrl(url: string): boolean {
+  try {
+    return isAllowedRedirectOrigin(url);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * GET /davinci/callback
+ *
+ * Popup callback page (no auth required - browser redirect target).
+ * After Authsignal MFA completes, the popup redirects here with a token.
+ * This page sends the token back to the DaVinci parent window via
+ * postMessage and closes itself.
+ */
+router.get("/callback", (req: Request, res: Response) => {
+  const token = typeof req.query.token === "string" ? req.query.token : "";
+  res.send(`<!DOCTYPE html>
+<html><head><title>MFA Complete</title></head>
+<body>
+<p>MFA verification complete. This window will close automatically.</p>
+<script>
+  if (window.opener) {
+    window.opener.postMessage({ type: "authsignal-mfa-complete", token: ${JSON.stringify(token)} }, "*");
+    window.close();
+  } else {
+    document.body.innerHTML = "<p>MFA complete. You can close this tab and return to the login page.</p>";
+  }
+</script>
+</body></html>`);
+});
+
+// All DaVinci bridge endpoints below require API key auth
 router.use(davinciApiKeyAuth);
 
 /**
@@ -63,6 +105,14 @@ router.post("/mfa/init", async (req: Request, res: Response) => {
 
     if (!body.userId) {
       res.status(400).json({ error: "userId is required" });
+      return;
+    }
+    if (!SAFE_IDENTIFIER_RE.test(body.userId)) {
+      res.status(400).json({ error: "Invalid userId format" });
+      return;
+    }
+    if (body.action && !SAFE_ACTION_RE.test(body.action)) {
+      res.status(400).json({ error: "Invalid action format" });
       return;
     }
     if (!body.redirectUrl) {
@@ -221,6 +271,14 @@ router.post("/passwordless/init", async (req: Request, res: Response) => {
     }
     if (!userId && !email) {
       res.status(400).json({ error: "userId or email is required" });
+      return;
+    }
+    if (userId && !SAFE_IDENTIFIER_RE.test(userId)) {
+      res.status(400).json({ error: "Invalid userId format" });
+      return;
+    }
+    if (email && !SAFE_IDENTIFIER_RE.test(email)) {
+      res.status(400).json({ error: "Invalid email format" });
       return;
     }
 
