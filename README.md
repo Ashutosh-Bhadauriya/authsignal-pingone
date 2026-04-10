@@ -70,7 +70,7 @@ sequenceDiagram
     B->>S: GET /oidc/callback
     S->>A: POST /oidc/token (code + verifier)
     A-->>S: { id_token }
-    S->>S: Verify ID token (JWKS + nonce)
+    S->>S: Verify ID token (JWKS)
     S-->>B: 302 → /demo/mfa-complete
 
     Note over B,A: ── Session Creation ──
@@ -126,7 +126,7 @@ Browser → 302 → /oidc/initiate?user_id=...&email=...&action=signIn
 ```
 Bridge → POST Authsignal /init-auth (userId, action, email)
   → receives scoped token
-  → 302 → Authsignal /oidc/auth?token=...&code_challenge=...&state=...&nonce=...
+  → 302 → Authsignal /oidc/auth?token=...&code_challenge=...&state=...
 ```
 
 ### Step 7: User completes MFA challenge
@@ -141,7 +141,7 @@ Browser → 302 → /oidc/callback?code=...&state=...
 ```
 Bridge → POST Authsignal /oidc/token (code + code_verifier)
   → receives ID token
-  → verifies via JWKS (signature, issuer, audience, nonce)
+  → verifies via JWKS (signature, issuer, audience)
   → reads action_state, action_code, action_verification_method claims
   → confirms action_state === CHALLENGE_SUCCEEDED
   → confirms sub matches expected userId, action_code matches expected action
@@ -184,7 +184,7 @@ Next login will require both PingOne credentials AND Authsignal MFA again.
 
 ```
 Browser → POST /demo/mfa-settings → Server
-  → Authsignal trackAction("manageSettings", { redirectToSettings: true })
+  → Authsignal track (action: "manageSettings", redirectToSettings: true)
   → Returns settings URL
 
 Browser → redirect to Authsignal settings UI
@@ -200,12 +200,11 @@ Browser → redirect to Authsignal settings UI
 |--------|-----------|
 | Code interception | PKCE — `code_verifier` never leaves server |
 | CSRF | State parameter validated on callback; Origin/Referer/custom-header check on POST endpoints |
-| Token replay | Nonce verified in ID token |
+| Token replay | Nonce verified in PingOne ID token; single-use state + PKCE + short TTL for Authsignal ID token |
 | Token tampering | JWKS signature verification |
 | Cookie tampering | Session cookies are signed with `SESSION_SECRET` |
 | MFA bypass | Session only created after MFA succeeds |
 | Cross-user MFA swap | userId matched between pending context and MFA result |
-| API key brute force | HMAC timing-safe comparison (no length leak) |
 | Memory exhaustion | Bounded in-memory stores with TTL cleanup (sessions, login flows, bridge sessions) |
 | Credential exposure | Secrets server-side only, httpOnly cookies |
 | Open redirect | Redirect URL allowlist; same-origin check on bridge callback_url |
@@ -285,7 +284,7 @@ npm start      # Start production server
 | `GET /demo/mfa-complete` | Bridge redirects here after MFA → create session |
 | `GET /demo/session` | Current session info (JSON) |
 | `POST /demo/mfa-settings` | Opens Authsignal authenticator management |
-| `POST /demo/logout` | Ends local session + PingOne SSO session |okay fi
+| `POST /demo/logout` | Ends local session + PingOne SSO session |
 
 ### MFA Federation Bridge Endpoints
 
