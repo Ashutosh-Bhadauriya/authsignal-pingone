@@ -23,7 +23,7 @@ export function requireSession(
     return;
   }
 
-  (req as any).appSession = session;
+  req.appSession = session;
   next();
 }
 

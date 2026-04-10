@@ -1,6 +1,5 @@
 import { Authsignal, VerificationMethod as AuthsignalVerificationMethod } from "@authsignal/node";
 import { config } from "../config.js";
-import type { TrackActionRequest, TrackActionResponse } from "../types/index.js";
 
 // ─── Server SDK Client ──────────────────────────────────────────────────────
 
@@ -9,22 +8,25 @@ const authsignal = new Authsignal({
   apiUrl: config.authsignal.apiUrl,
 });
 
-// ─── Track Action ───────────────────────────────────────────────────────────
+// ─── Manage Settings URL ────────────────────────────────────────────────────
+// Returns the URL to Authsignal's authenticator management UI for a user.
 
-export async function trackAction(
-  req: TrackActionRequest
-): Promise<TrackActionResponse> {
+export async function getManageSettingsUrl(params: {
+  userId: string;
+  email?: string;
+  redirectUrl: string;
+}): Promise<string | undefined> {
   const result = await authsignal.track({
-    userId: req.userId,
-    action: req.action,
+    userId: params.userId,
+    action: "manageSettings",
     attributes: {
-      redirectUrl: req.attributes?.redirectUrl,
-      email: req.attributes?.email,
-      redirectToSettings: req.attributes?.redirectToSettings,
+      email: params.email,
+      redirectUrl: params.redirectUrl,
+      redirectToSettings: true,
     },
   });
 
-  return { url: result.url };
+  return result.url;
 }
 
 // ─── Get User Enrollment ────────────────────────────────────────────────────
@@ -94,16 +96,18 @@ export async function oidcInitAuth(params: {
 // ─── OIDC Token Exchange ────────────────────────────────────────────────────
 // Exchanges an authorization code at Authsignal's OIDC token endpoint.
 
-export async function oidcTokenExchange(params: {
-  code: string;
-  redirectUri: string;
-  codeVerifier: string;
-}): Promise<{
+interface AuthsignalTokenResponse {
   access_token: string;
   id_token: string;
   token_type: string;
   expires_in: number;
-}> {
+}
+
+export async function oidcTokenExchange(params: {
+  code: string;
+  redirectUri: string;
+  codeVerifier: string;
+}): Promise<AuthsignalTokenResponse> {
   // Discovery doc specifies client_secret_post (credentials in POST body, not Basic auth)
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -128,5 +132,5 @@ export async function oidcTokenExchange(params: {
     );
   }
 
-  return response.json() as Promise<any>;
+  return response.json() as Promise<AuthsignalTokenResponse>;
 }

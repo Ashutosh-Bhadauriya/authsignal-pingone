@@ -24,7 +24,6 @@ import * as authsignalService from "../services/authsignal.js";
 import { recordMfaResult } from "../services/mfa-results.js";
 import {
   generateState,
-  generateNonce,
   generateCodeVerifier,
   generateCodeChallenge,
 } from "../utils/crypto.js";
@@ -181,7 +180,6 @@ router.get("/initiate", async (req: Request, res: Response) => {
 
     // Generate PKCE and state for the Authsignal OIDC flow
     const state = generateState();
-    const nonce = generateNonce();
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = generateCodeChallenge(codeVerifier);
 
@@ -198,7 +196,6 @@ router.get("/initiate", async (req: Request, res: Response) => {
     // Store session data for the callback
     bridgeSessions.set(state, {
       state,
-      nonce,
       codeVerifier,
       pingOneUserId: userId,
       pingOneSessionId: flowId,
@@ -216,7 +213,6 @@ router.get("/initiate", async (req: Request, res: Response) => {
     authUrl.searchParams.set("redirect_uri", callbackUrl);
     authUrl.searchParams.set("scope", "openid");
     authUrl.searchParams.set("state", state);
-    authUrl.searchParams.set("nonce", nonce);
     authUrl.searchParams.set("code_challenge", codeChallenge);
     authUrl.searchParams.set("code_challenge_method", "S256");
     authUrl.searchParams.set("token", initResult.token);
@@ -266,12 +262,11 @@ router.get("/callback", async (req: Request, res: Response) => {
       codeVerifier: session.codeVerifier,
     });
 
-    // Verify the Authsignal OIDC ID token, including the original nonce.
+    // Verify the Authsignal OIDC ID token (signature, issuer, audience).
     const claims = await verifyAuthsignalIdToken(
       tokens.id_token,
       config.authsignal.oidcUrl,
-      config.authsignal.tenantId,
-      session.nonce
+      config.authsignal.tenantId
     );
 
     const claimMap = claims as Record<string, unknown>;

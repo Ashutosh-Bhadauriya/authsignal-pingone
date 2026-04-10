@@ -296,21 +296,15 @@ router.get("/session", (req: Request, res: Response) => {
  */
 router.post("/mfa-settings", requireSession, async (req: Request, res: Response) => {
   try {
-    const session = (req as any).appSession as AppSession;
+    const session = req.appSession!;
 
-    const result = await authsignalService.trackAction({
+    const settingsUrl = await authsignalService.getManageSettingsUrl({
       userId: session.userId,
-      action: "manageSettings",
-      attributes: {
-        redirectUrl: `${config.app.baseUrl}/dashboard.html`,
-        email: session.email,
-        redirectToSettings: true,
-      },
+      email: session.email,
+      redirectUrl: `${config.app.baseUrl}/dashboard.html`,
     });
 
-    res.json({
-      settingsUrl: result.url,
-    });
+    res.json({ settingsUrl });
   } catch (error) {
     console.error("MFA settings error:", (error as Error).message);
     res.status(500).json({ error: "Failed to load MFA settings" });

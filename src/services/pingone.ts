@@ -42,17 +42,19 @@ export function buildAuthorizeUrl(params: {
 
 // ─── Token Exchange ─────────────────────────────────────────────────────────
 
-export async function exchangeCode(params: {
-  code: string;
-  redirectUri: string;
-  codeVerifier: string;
-}): Promise<{
+interface PingOneTokenResponse {
   access_token: string;
   id_token: string;
   refresh_token?: string;
   token_type: string;
   expires_in: number;
-}> {
+}
+
+export async function exchangeCode(params: {
+  code: string;
+  redirectUri: string;
+  codeVerifier: string;
+}): Promise<PingOneTokenResponse> {
   const { environmentId, clientId, clientSecret, authBaseUrl } = config.pingone;
   const tokenUrl = `${authBaseUrl}/${environmentId}/as/token`;
 
@@ -77,5 +79,5 @@ export async function exchangeCode(params: {
     throw new Error(`PingOne token exchange failed with status ${response.status}`);
   }
 
-  return response.json() as Promise<any>;
+  return response.json() as Promise<PingOneTokenResponse>;
 }

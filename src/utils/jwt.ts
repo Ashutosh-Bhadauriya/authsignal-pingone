@@ -57,9 +57,12 @@ export async function verifyPingOneIdToken(
 export async function verifyAuthsignalIdToken(
   idToken: string,
   oidcUrl: string,
-  tenantId: string,
-  nonce?: string
+  tenantId: string
 ): Promise<jose.JWTPayload> {
+  // Authsignal's OIDC does not echo the `nonce` claim in the ID token, so we
+  // cannot round-trip verify it here. Replay protection comes from the
+  // one-time `state` (consumed on callback), PKCE `code_verifier`, the short
+  // ID-token TTL, and the `sub`/`action_code` checks performed by the caller.
   const jwks = getAuthsignalJwks(oidcUrl);
 
   const { payload } = await jose.jwtVerify(idToken, jwks, {
@@ -67,10 +70,6 @@ export async function verifyAuthsignalIdToken(
     audience: tenantId,
     clockTolerance: 30,
   });
-
-  if (nonce && payload.nonce !== nonce) {
-    throw new Error("Authsignal ID token nonce mismatch");
-  }
 
   return payload;
 }

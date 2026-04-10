@@ -285,7 +285,7 @@ npm start      # Start production server
 | `GET /demo/mfa-complete` | Bridge redirects here after MFA → create session |
 | `GET /demo/session` | Current session info (JSON) |
 | `POST /demo/mfa-settings` | Opens Authsignal authenticator management |
-| `POST /demo/logout` | Ends local session + PingOne SSO session |
+| `POST /demo/logout` | Ends local session + PingOne SSO session |okay fi
 
 ### MFA Federation Bridge Endpoints
 

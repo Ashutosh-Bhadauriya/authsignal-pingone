@@ -9,25 +9,10 @@ export type VerificationMethod =
   | "PUSH"
   | "WHATSAPP";
 
-export interface TrackActionRequest {
-  userId: string;
-  action: string;
-  attributes?: {
-    redirectUrl?: string;
-    email?: string;
-    redirectToSettings?: boolean;
-  };
-}
-
-export interface TrackActionResponse {
-  url?: string;
-}
-
 // ─── OIDC Bridge Types ──────────────────────────────────────────────────────
 
 export interface OidcBridgeSession {
   state: string;
-  nonce: string;
   codeVerifier: string;
   pingOneUserId: string;
   pingOneSessionId?: string;
