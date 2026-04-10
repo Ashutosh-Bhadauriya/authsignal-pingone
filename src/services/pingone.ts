@@ -24,9 +24,6 @@ export function buildAuthorizeUrl(params: {
   state: string;
   nonce: string;
   codeChallenge: string;
-  scope?: string;
-  acrValues?: string;
-  loginHint?: string;
 }): string {
   const { environmentId, clientId, authBaseUrl } = config.pingone;
   const url = new URL(`/${environmentId}/as/authorize`, authBaseUrl);
@@ -34,18 +31,11 @@ export function buildAuthorizeUrl(params: {
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("redirect_uri", params.redirectUri);
-  url.searchParams.set("scope", params.scope ?? "openid profile email");
+  url.searchParams.set("scope", "openid profile email");
   url.searchParams.set("state", params.state);
   url.searchParams.set("nonce", params.nonce);
   url.searchParams.set("code_challenge", params.codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
-
-  if (params.acrValues) {
-    url.searchParams.set("acr_values", params.acrValues);
-  }
-  if (params.loginHint) {
-    url.searchParams.set("login_hint", params.loginHint);
-  }
 
   return url.toString();
 }
@@ -84,8 +74,7 @@ export async function exchangeCode(params: {
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`PingOne token exchange failed: ${response.status} ${text}`);
+    throw new Error(`PingOne token exchange failed with status ${response.status}`);
   }
 
   return response.json() as Promise<any>;

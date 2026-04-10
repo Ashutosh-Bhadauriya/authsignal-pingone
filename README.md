@@ -76,7 +76,7 @@ sequenceDiagram
     Note over B,A: ── Session Creation ──
 
     B->>S: GET /demo/mfa-complete
-    S->>S: Validate callbackState + userId match
+    S->>S: Consume verified server-side MFA result
     S->>S: Create session (mfaVerified: true)
     S-->>B: 302 → /dashboard.html (signed cookie set)
 ```
@@ -149,14 +149,14 @@ Bridge → POST Authsignal /oidc/token (code + code_verifier)
 
 ### Step 9: Bridge redirects back to the app
 
+The bridge records the verified Authsignal result server-side, keyed by the one-time `callback_state`, before redirecting:
 ```
-Browser → 302 → /demo/mfa-complete?callback_state=<random>&success=true
-    &user_id=...&verification_method=PASSKEY
+Browser → 302 → /demo/mfa-complete?callback_state=<random>
 ```
 
 ### Step 10: App creates session
 
-Server validates the `callback_state` against the pending login, verifies `user_id` matches, creates the session:
+Server validates the `callback_state` against the pending login, consumes the server-side MFA result, verifies the user matches, and creates the session:
 ```
 Session created: { mfaVerified: true, mfaMethod: "PASSKEY" }
   → signed httpOnly cookie set
@@ -199,7 +199,7 @@ Browser → redirect to Authsignal settings UI
 | Threat | Protection |
 |--------|-----------|
 | Code interception | PKCE — `code_verifier` never leaves server |
-| CSRF | State parameter validated on callback; Origin/Referer header check on POST endpoints |
+| CSRF | State parameter validated on callback; Origin/Referer/custom-header check on POST endpoints |
 | Token replay | Nonce verified in ID token |
 | Token tampering | JWKS signature verification |
 | Cookie tampering | Session cookies are signed with `SESSION_SECRET` |
@@ -308,7 +308,7 @@ Initiates the Authsignal MFA challenge. Redirects the browser through Authsignal
 
 **Redirect modes** (mutually exclusive):
 - `flow_id` + `id_token_hint` — PingOne resume mode (redirects to PingOne `/as/resume`)
-- `callback_url` + `callback_state` — App callback mode (redirects to your app with MFA result)
+- `callback_url` + `callback_state` — App callback mode (redirects to your app after storing the MFA result server-side)
 - Neither — API mode (returns JSON)
 
 ### Environment Variables
@@ -324,6 +324,6 @@ Initiates the Authsignal MFA challenge. Redirects the browser through Authsignal
 | `PINGONE_REGION` | No | `NA` | PingOne region (`NA`, `EU`, `CA`, `AP`, `AU`) — sets auth + API URLs |
 | `PORT` | No | `3000` | Server port |
 | `APP_BASE_URL` | No | `http://localhost:3000` | Public base URL of this server |
-| `SESSION_SECRET` | No | Auto-generated | Cookie signing secret (auto-generated if not set; sessions won't survive restarts) |
+| `SESSION_SECRET` | Production only | Auto-generated in development | Cookie signing secret; must be at least 32 bytes |
+| `SESSION_COOKIE_SECURE` | No | Based on `APP_BASE_URL` | Force secure cookies on or off (`true`/`false`) |
 | `TRUST_PROXY` | No | `false` | Express trust proxy setting |
-

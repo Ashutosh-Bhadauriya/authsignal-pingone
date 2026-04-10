@@ -1,30 +1,5 @@
 import { type Request, type Response, type NextFunction } from "express";
-import { config } from "../config.js";
-import { timingSafeEqual } from "../utils/crypto.js";
-
-/**
- * Authenticates DaVinci HTTP connector requests using a shared API key.
- * The key is passed via the X-API-Key header.
- */
-export function davinciApiKeyAuth(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
-  const apiKey = config.davinci.apiKey;
-  if (!apiKey) {
-    res.status(500).json({ error: "DaVinci bridge API key not configured" });
-    return;
-  }
-
-  const providedKey = req.headers["x-api-key"];
-  if (typeof providedKey !== "string" || !timingSafeEqual(providedKey, apiKey)) {
-    res.status(401).json({ error: "Invalid API key" });
-    return;
-  }
-
-  next();
-}
+import type { AppSession } from "../types/index.js";
 
 /**
  * Validates that a session cookie exists and is not expired.
@@ -54,7 +29,7 @@ export function requireSession(
 
 // In-memory session store (use Redis/DB in production)
 export const MAX_SESSIONS = 50_000;
-export const sessionStore = new Map<string, any>();
+export const sessionStore = new Map<string, AppSession>();
 
 // Clean up expired sessions every 5 minutes
 setInterval(() => {

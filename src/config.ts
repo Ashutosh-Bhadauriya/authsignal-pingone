@@ -12,6 +12,8 @@ const required = (name: string): string => {
 const optional = (name: string, fallback: string): string =>
   process.env[name] || fallback;
 
+const isProduction = process.env.NODE_ENV === "production";
+
 const parseTrustProxy = (value: string): boolean | number | string => {
   if (value === "true") return true;
   if (value === "false") return false;
@@ -22,6 +24,22 @@ const parseTrustProxy = (value: string): boolean | number | string => {
   }
 
   return value;
+};
+
+const parsePort = (value: string): number => {
+  const port = Number.parseInt(value, 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`Invalid PORT: ${value}`);
+  }
+  return port;
+};
+
+const parseBoolean = (name: string, fallback: boolean): boolean => {
+  const value = process.env[name];
+  if (!value) return fallback;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`Invalid ${name}: must be true or false`);
 };
 
 // ─── Region → URL Mapping ─────────────────────────────────────────────────
@@ -65,19 +83,43 @@ function getPingOneUrls(): { authBaseUrl: string; apiBaseUrl: string } {
 
 function getSessionSecret(): string {
   const envValue = process.env["SESSION_SECRET"];
-  if (envValue) return envValue;
+  if (envValue) {
+    if (Buffer.byteLength(envValue, "utf8") < 32) {
+      throw new Error("SESSION_SECRET must be at least 32 bytes");
+    }
+    return envValue;
+  }
+
+  if (isProduction) {
+    throw new Error("SESSION_SECRET must be set in production");
+  }
 
   console.warn("WARNING: SESSION_SECRET not set — using auto-generated value. Sessions will not survive restarts.");
   return randomBytes(32).toString("hex");
+}
+
+function getAppBaseUrl(): string {
+  const value = optional("APP_BASE_URL", "http://localhost:3000");
+  const url = new URL(value);
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("APP_BASE_URL must use http or https");
+  }
+  if (url.search || url.hash) {
+    throw new Error("APP_BASE_URL must not include a query string or fragment");
+  }
+
+  return url.toString().replace(/\/$/, "");
 }
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 const authsignalUrls = getAuthsignalUrls();
 const pingoneUrls = getPingOneUrls();
+const appBaseUrl = getAppBaseUrl();
 
 export const config = {
-  port: parseInt(optional("PORT", "3000"), 10),
+  port: parsePort(optional("PORT", "3000")),
 
   // ─── Authsignal ─────────────────────────────────────────────────────────
   authsignal: {
@@ -89,31 +131,25 @@ export const config = {
 
   // ─── PingOne ────────────────────────────────────────────────────────────
   pingone: {
-    environmentId: optional("PINGONE_ENVIRONMENT_ID", ""),
-    clientId: optional("PINGONE_CLIENT_ID", ""),
-    clientSecret: optional("PINGONE_CLIENT_SECRET", ""),
+    environmentId: required("PINGONE_ENVIRONMENT_ID"),
+    clientId: required("PINGONE_CLIENT_ID"),
+    clientSecret: required("PINGONE_CLIENT_SECRET"),
     authBaseUrl: pingoneUrls.authBaseUrl,
     apiBaseUrl: pingoneUrls.apiBaseUrl,
   },
 
   // ─── App ────────────────────────────────────────────────────────────────
   app: {
-    baseUrl: optional("APP_BASE_URL", "http://localhost:3000"),
+    baseUrl: appBaseUrl,
     sessionSecret: getSessionSecret(),
     sessionMaxAge: 3600,
     trustProxy: parseTrustProxy(optional("TRUST_PROXY", "false")),
+    sessionCookieSecure: parseBoolean(
+      "SESSION_COOKIE_SECURE",
+      new URL(appBaseUrl).protocol === "https:"
+    ),
   },
 
-  // ─── DaVinci API Key (for bridge auth) ─────────────────────────────────
-  davinci: {
-    apiKey: optional("DAVINCI_BRIDGE_API_KEY", ""),
-  },
-
-  // ─── OIDC Provider (for DaVinci OIDC connector) ──────────────────────
-  oidcProvider: {
-    clientId: optional("OIDC_PROVIDER_CLIENT_ID", ""),
-    clientSecret: optional("OIDC_PROVIDER_CLIENT_SECRET", ""),
-  },
 } as const;
 
 export type Config = typeof config;

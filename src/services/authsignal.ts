@@ -1,10 +1,6 @@
 import { Authsignal, VerificationMethod as AuthsignalVerificationMethod } from "@authsignal/node";
 import { config } from "../config.js";
-import type {
-  TrackActionRequest,
-  TrackActionResponse,
-  ValidateChallengeResponse,
-} from "../types/index.js";
+import type { TrackActionRequest, TrackActionResponse } from "../types/index.js";
 
 // ─── Server SDK Client ──────────────────────────────────────────────────────
 
@@ -24,55 +20,17 @@ export async function trackAction(
     attributes: {
       redirectUrl: req.attributes?.redirectUrl,
       email: req.attributes?.email,
-      phoneNumber: req.attributes?.phoneNumber,
-      ipAddress: req.attributes?.ipAddress,
-      userAgent: req.attributes?.userAgent,
-      deviceId: req.attributes?.deviceId,
-      custom: req.attributes?.custom as Record<string, string | number | boolean> | undefined,
       redirectToSettings: req.attributes?.redirectToSettings,
     },
   });
 
-  return {
-    state: result.state as TrackActionResponse["state"],
-    idempotencyKey: result.idempotencyKey!,
-    url: result.url,
-    token: result.token,
-    isEnrolled: result.isEnrolled ?? false,
-    allowedVerificationMethods:
-      result.allowedVerificationMethods as TrackActionResponse["allowedVerificationMethods"],
-    enrolledVerificationMethods:
-      result.enrolledVerificationMethods as TrackActionResponse["enrolledVerificationMethods"],
-  };
-}
-
-// ─── Validate Challenge ─────────────────────────────────────────────────────
-
-export async function validateChallenge(
-  token: string
-): Promise<ValidateChallengeResponse> {
-  const result = await authsignal.validateChallenge({ token });
-
-  return {
-    isValid: result.isValid ?? false,
-    state: result.state as ValidateChallengeResponse["state"],
-    stateUpdatedAt: result.stateUpdatedAt ?? new Date().toISOString(),
-    userId: result.userId ?? "",
-    actionCode: result.action ?? "",
-    idempotencyKey: result.idempotencyKey ?? "",
-    verificationMethod:
-      result.verificationMethod as ValidateChallengeResponse["verificationMethod"],
-  };
+  return { url: result.url };
 }
 
 // ─── Get User Enrollment ────────────────────────────────────────────────────
 
 export async function getUser(userId: string) {
   return authsignal.getUser({ userId });
-}
-
-export async function getAuthenticators(userId: string) {
-  return authsignal.getAuthenticators({ userId });
 }
 
 // ─── Enroll Verified Authenticator ──────────────────────────────────────────
@@ -82,7 +40,6 @@ export async function enrollVerifiedAuthenticator(params: {
   userId: string;
   verificationMethod: AuthsignalVerificationMethod;
   email?: string;
-  phoneNumber?: string;
   isDefault?: boolean;
 }) {
   return authsignal.enrollVerifiedAuthenticator({
@@ -90,7 +47,6 @@ export async function enrollVerifiedAuthenticator(params: {
     attributes: {
       verificationMethod: params.verificationMethod,
       email: params.email,
-      phoneNumber: params.phoneNumber,
       isDefault: params.isDefault,
     },
   });
@@ -107,7 +63,6 @@ export async function oidcInitAuth(params: {
   action: string;
   email?: string;
   phoneNumber?: string;
-  custom?: Record<string, unknown>;
 }): Promise<{ token: string }> {
   const basicAuth = Buffer.from(`${config.authsignal.secret}:`).toString(
     "base64"
@@ -124,14 +79,12 @@ export async function oidcInitAuth(params: {
       action: params.action,
       email: params.email,
       phoneNumber: params.phoneNumber,
-      custom: params.custom,
     }),
   });
 
   if (!response.ok) {
-    const body = await response.text();
     throw new Error(
-      `Authsignal OIDC init-auth failed: ${response.status} ${body}`
+      `Authsignal OIDC init-auth failed with status ${response.status}`
     );
   }
 
@@ -170,9 +123,8 @@ export async function oidcTokenExchange(params: {
   });
 
   if (!response.ok) {
-    const text = await response.text();
     throw new Error(
-      `Authsignal OIDC token exchange failed: ${response.status} ${text}`
+      `Authsignal OIDC token exchange failed with status ${response.status}`
     );
   }
 

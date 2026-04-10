@@ -5,9 +5,8 @@
  * step to Authsignal's OIDC-based MFA, then resume the PingOne flow.
  *
  * This bridge is an OIDC *client* to Authsignal (not an OIDC provider).
- * PingOne triggers it via a browser redirect (e.g. from a DaVinci flow
- * redirect node or a custom sign-on policy step), NOT via the PingOne
- * "External IdP" admin configuration.
+ * PingOne triggers it via a browser redirect (e.g. from a custom sign-on
+ * policy step), NOT via the PingOne "External IdP" admin configuration.
  *
  * Flow:
  * 1. User authenticates with PingOne (username/password)
@@ -22,6 +21,7 @@
 import { Router, type Request, type Response } from "express";
 import { config } from "../config.js";
 import * as authsignalService from "../services/authsignal.js";
+import { recordMfaResult } from "../services/mfa-results.js";
 import {
   generateState,
   generateNonce,
@@ -33,12 +33,15 @@ import {
   verifyPingOneIdToken,
 } from "../utils/jwt.js";
 import {
+  SAFE_CALLBACK_STATE_RE,
   SAFE_IDENTIFIER_RE,
   getQueryString,
   getStringClaim,
+  isReasonableEmail,
+  isReasonablePhoneNumber,
   normalizeAction,
 } from "../utils/validation.js";
-import type { OidcBridgeSession } from "../types/index.js";
+import type { OidcBridgeSession, VerificationMethod } from "../types/index.js";
 
 const router = Router();
 
@@ -139,6 +142,14 @@ router.get("/initiate", async (req: Request, res: Response) => {
       res.status(400).json({ error: "Invalid user_id format" });
       return;
     }
+    if (userEmail && !isReasonableEmail(userEmail)) {
+      res.status(400).json({ error: "Invalid email format" });
+      return;
+    }
+    if (phone && !isReasonablePhoneNumber(phone)) {
+      res.status(400).json({ error: "Invalid phone format" });
+      return;
+    }
     if (flowId && !SAFE_IDENTIFIER_RE.test(flowId)) {
       res.status(400).json({ error: "Invalid flow_id format" });
       return;
@@ -149,6 +160,10 @@ router.get("/initiate", async (req: Request, res: Response) => {
     }
     if (callbackUrlParam && !callbackStateParam) {
       res.status(400).json({ error: "callback_state is required with callback_url" });
+      return;
+    }
+    if (callbackStateParam && !SAFE_CALLBACK_STATE_RE.test(callbackStateParam)) {
+      res.status(400).json({ error: "Invalid callback_state format" });
       return;
     }
     if (callbackUrlParam && !isAllowedCallbackUrl(callbackUrlParam)) {
@@ -274,12 +289,12 @@ router.get("/callback", async (req: Request, res: Response) => {
     const mfaSucceeded =
       actionState === "CHALLENGE_SUCCEEDED" || actionState === "ALLOW";
 
-    // Verify the token subject matches the expected user
-    if (claims.sub && claims.sub !== session.pingOneUserId) {
+    // Verify the token subject matches the expected user.
+    if (!claims.sub || claims.sub !== session.pingOneUserId) {
       res.status(403).json({ error: "User mismatch in MFA response" });
       return;
     }
-    if (actionCode && actionCode !== session.action) {
+    if (!actionCode || actionCode !== session.action) {
       res.status(403).json({ error: "Action mismatch in MFA response" });
       return;
     }
@@ -301,17 +316,23 @@ router.get("/callback", async (req: Request, res: Response) => {
 
     // 2. Callback mode — redirect back to the caller's app
     if (session.callbackUrl) {
+      const stored = recordMfaResult({
+        callbackState: session.callbackState!,
+        success: mfaSucceeded,
+        userId: session.pingOneUserId,
+        action: session.action,
+        state: actionState,
+        verificationMethod: verificationMethod as VerificationMethod | undefined,
+        error: mfaSucceeded ? undefined : actionState,
+      });
+
+      if (!stored) {
+        res.status(503).json({ error: "Service temporarily at capacity" });
+        return;
+      }
+
       const target = new URL(session.callbackUrl);
       target.searchParams.set("callback_state", session.callbackState!);
-      target.searchParams.set("success", String(mfaSucceeded));
-      target.searchParams.set("user_id", session.pingOneUserId);
-      target.searchParams.set("action", session.action);
-      if (verificationMethod) {
-        target.searchParams.set("verification_method", verificationMethod);
-      }
-      if (!mfaSucceeded && actionState) {
-        target.searchParams.set("error", actionState);
-      }
       res.redirect(target.toString());
       return;
     }

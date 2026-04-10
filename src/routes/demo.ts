@@ -17,6 +17,7 @@ import { Router, type Request, type Response } from "express";
 import { config } from "../config.js";
 import * as pingoneService from "../services/pingone.js";
 import * as authsignalService from "../services/authsignal.js";
+import { consumeMfaResult } from "../services/mfa-results.js";
 import { requireSession, sessionStore, MAX_SESSIONS } from "../middleware/auth.js";
 import {
   generateState,
@@ -26,7 +27,7 @@ import {
   generateSessionId,
 } from "../utils/crypto.js";
 import { getQueryString } from "../utils/validation.js";
-import type { AppSession, VerificationMethod } from "../types/index.js";
+import type { AppSession } from "../types/index.js";
 
 const router = Router();
 
@@ -70,7 +71,7 @@ setInterval(() => {
 function setSessionCookie(res: Response, sessionId: string): void {
   res.cookie("session_id", sessionId, {
     httpOnly: true,
-    secure: config.app.baseUrl.startsWith("https"),
+    secure: config.app.sessionCookieSecure,
     sameSite: "lax",
     maxAge: config.app.sessionMaxAge * 1000,
     signed: true,
@@ -201,13 +202,15 @@ router.get("/callback", async (req: Request, res: Response) => {
 router.get("/mfa-complete", (req: Request, res: Response) => {
   try {
     const callbackState = getQueryString(req.query.callback_state);
-    const success = getQueryString(req.query.success);
-    const userId = getQueryString(req.query.user_id);
-    const errorParam = getQueryString(req.query.error);
-    const verificationMethod = getQueryString(req.query.verification_method);
 
     if (!callbackState) {
       res.redirect(`/?error=${encodeURIComponent("Missing callback state")}`);
+      return;
+    }
+
+    const mfaResult = consumeMfaResult(callbackState);
+    if (!mfaResult) {
+      res.redirect(`/?error=${encodeURIComponent("MFA verification incomplete")}`);
       return;
     }
 
@@ -219,14 +222,14 @@ router.get("/mfa-complete", (req: Request, res: Response) => {
     }
     pendingLogins.delete(callbackState);
 
-    // Verify the user_id from the bridge matches the pending login
-    if (userId && userId !== pending.userId) {
+    // Verify the Authsignal-verified bridge result matches the pending login.
+    if (mfaResult.userId !== pending.userId) {
       res.redirect(`/?error=${encodeURIComponent("User mismatch")}`);
       return;
     }
 
-    if (success !== "true") {
-      const msg = errorParam || "MFA verification failed";
+    if (!mfaResult.success) {
+      const msg = mfaResult.error || "MFA verification failed";
       res.redirect(`/?error=${encodeURIComponent(msg)}`);
       return;
     }
@@ -244,7 +247,7 @@ router.get("/mfa-complete", (req: Request, res: Response) => {
       email: pending.email,
       displayName: pending.displayName,
       mfaVerified: true,
-      mfaMethod: verificationMethod as VerificationMethod | undefined,
+      mfaMethod: mfaResult.verificationMethod,
       authenticatedAt: Date.now(),
       expiresAt: Date.now() + config.app.sessionMaxAge * 1000,
     };
@@ -307,7 +310,6 @@ router.post("/mfa-settings", requireSession, async (req: Request, res: Response)
 
     res.json({
       settingsUrl: result.url,
-      token: result.token,
     });
   } catch (error) {
     console.error("MFA settings error:", (error as Error).message);
@@ -325,7 +327,12 @@ router.post("/logout", (req: Request, res: Response) => {
   if (sessionId) {
     sessionStore.delete(sessionId);
   }
-  res.clearCookie("session_id");
+  res.clearCookie("session_id", {
+    httpOnly: true,
+    secure: config.app.sessionCookieSecure,
+    sameSite: "lax",
+    signed: true,
+  });
 
   // Build PingOne signoff URL to end the SSO session
   const { environmentId, authBaseUrl } = config.pingone;

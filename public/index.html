@@ -164,26 +164,6 @@
     </div>
   </div>
 
-  <script>
-    // Show error if redirected with error param
-    var params = new URLSearchParams(window.location.search);
-    var error = params.get('error');
-    if (error) {
-      var banner = document.getElementById('error-banner');
-      banner.textContent = decodeURIComponent(error);
-      banner.style.display = 'block';
-      history.replaceState(null, '', '/');
-    }
-
-    // Check if already authenticated
-    fetch('/demo/session')
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (data.authenticated) {
-          window.location.href = '/dashboard.html';
-        }
-      })
-      .catch(function() {});
-  </script>
+  <script src="/index.js"></script>
 </body>
 </html>

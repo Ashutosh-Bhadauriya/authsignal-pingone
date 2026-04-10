@@ -7,23 +7,18 @@ export const securityHeaders: RequestHandler = helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+      scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "https://*.authsignal.com", "https://*.pingone.com", "https://cdn.jsdelivr.net"],
+      connectSrc: ["'self'", "https://*.authsignal.com", "https://*.pingone.com"],
       frameSrc: ["'self'", "https://*.authsignal.com"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      frameAncestors: ["'none'"],
     },
   },
   crossOriginEmbedderPolicy: false,
-});
-
-export const apiRateLimit = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Too many requests, please try again later" },
 });
 
 export const authRateLimit = rateLimit({
@@ -47,14 +42,14 @@ export function csrfOriginCheck(req: Request, res: Response, next: NextFunction)
   }
 
   const origin = req.headers["origin"];
+  const appOrigin = new URL(config.app.baseUrl).origin;
   if (!origin) {
     // No origin header — could be a same-origin non-fetch request.
-    // Fall back to checking Referer if present.
+    // Fall back to checking Referer, then require a custom header for XHR/fetch.
     const referer = req.headers["referer"];
     if (referer) {
       try {
         const refOrigin = new URL(referer).origin;
-        const appOrigin = new URL(config.app.baseUrl).origin;
         if (refOrigin !== appOrigin) {
           res.status(403).json({ error: "Cross-origin request blocked" });
           return;
@@ -63,12 +58,19 @@ export function csrfOriginCheck(req: Request, res: Response, next: NextFunction)
         res.status(403).json({ error: "Invalid referer" });
         return;
       }
+      next();
+      return;
     }
-    next();
+
+    if (req.headers["x-csrf-protection"] === "1") {
+      next();
+      return;
+    }
+
+    res.status(403).json({ error: "CSRF check failed" });
     return;
   }
 
-  const appOrigin = new URL(config.app.baseUrl).origin;
   if (origin !== appOrigin) {
     res.status(403).json({ error: "Cross-origin request blocked" });
     return;
