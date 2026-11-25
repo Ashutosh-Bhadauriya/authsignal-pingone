@@ -134,6 +134,10 @@
       font-size: 0.875rem;
       color: var(--text);
     }
+    #dv-stage { margin-top: 0; }
+    #dv-widget { position: relative; min-height: 360px; }
+    .dv-status { text-align: center; color: var(--muted); font-size: 0.9rem; padding: 1rem 0; }
+    .dv-cancel { margin-top: 1rem; }
     .feature-list li::before {
       content: '\2713';
       color: #10b981;
@@ -151,16 +155,23 @@
     </div>
 
     <div class="card">
-      <h1>MFA & Passwordless Demo</h1>
-      <p class="subtitle">
+      <h1 id="title">MFA & Passwordless Demo</h1>
+      <p class="subtitle" id="subtitle">
         Sign in with PingOne, secured with Authsignal MFA.
       </p>
 
       <div class="error-banner" id="error-banner"></div>
 
-      <a href="/demo/login" class="btn btn-secondary">
+      <a href="/demo/login" class="btn btn-secondary" id="login-btn">
         Sign in with PingOne
       </a>
+    </div>
+
+    <!-- DaVinci mode: the flow renders here, inside the app's own page -->
+    <div id="dv-stage" style="display:none;">
+      <p class="dv-status" id="dv-status">Starting sign-in...</p>
+      <div id="dv-widget" class="dvWidget"></div>
+      <button class="btn btn-outline dv-cancel" id="dv-cancel" type="button">Cancel</button>
     </div>
   </div>
 

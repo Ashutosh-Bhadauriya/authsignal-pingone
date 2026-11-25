@@ -112,6 +112,89 @@ function getAppBaseUrl(): string {
   return url.toString().replace(/\/$/, "");
 }
 
+// ─── OIDC Provider (bridge acts as an IdP for PingOne / DaVinci) ───────────
+
+function parseRedirectUris(value: string): string[] {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const url = new URL(entry);
+      if (url.protocol !== "https:" && url.hostname !== "localhost") {
+        throw new Error(`OIDC_PROVIDER_REDIRECT_URIS entries must use https: ${entry}`);
+      }
+      if (url.hash) {
+        throw new Error(`OIDC_PROVIDER_REDIRECT_URIS entries must not include a fragment: ${entry}`);
+      }
+      return url.toString();
+    });
+}
+
+function getOidcProviderConfig() {
+  const clientId = process.env["OIDC_PROVIDER_CLIENT_ID"];
+  const clientSecret = process.env["OIDC_PROVIDER_CLIENT_SECRET"];
+  const redirectUris = parseRedirectUris(optional("OIDC_PROVIDER_REDIRECT_URIS", ""));
+
+  if (clientSecret && Buffer.byteLength(clientSecret, "utf8") < 32) {
+    throw new Error("OIDC_PROVIDER_CLIENT_SECRET must be at least 32 bytes");
+  }
+
+  return {
+    // The provider is enabled only when a client and at least one redirect URI are configured.
+    enabled: Boolean(clientId && clientSecret && redirectUris.length > 0),
+    clientId,
+    clientSecret,
+    redirectUris,
+    // Code of the Authsignal action (type FLOW) that runs the MFA step.
+    flowActionCode: optional("AUTHSIGNAL_FLOW_ACTION_CODE", "pingone-mfa"),
+    // Private RSA key as a JWK JSON string. Required in production.
+    signingKeyJwk: process.env["OIDC_PROVIDER_SIGNING_KEY_JWK"],
+    isProduction,
+  };
+}
+
+// ─── DaVinci application (demo app embeds the DaVinci widget) ──────────────
+
+function getDavinciConfig(authBaseUrl: string) {
+  const environmentId = process.env["DAVINCI_ENVIRONMENT_ID"];
+  const policyId = process.env["DAVINCI_POLICY_ID"];
+  const apiKey = process.env["DAVINCI_API_KEY"];
+  const flowId = process.env["DAVINCI_FLOW_ID"];
+
+  // These IDs become URL path segments, so only accept the shapes DaVinci issues.
+  const idPattern = /^[a-f0-9-]{32,36}$/i;
+  for (const [name, value] of [
+    ["DAVINCI_ENVIRONMENT_ID", environmentId],
+    ["DAVINCI_POLICY_ID", policyId],
+    ["DAVINCI_FLOW_ID", flowId],
+  ] as const) {
+    if (value && !idPattern.test(value)) {
+      throw new Error(`Invalid ${name}: expected the ID shown in the DaVinci console`);
+    }
+  }
+
+  const authUrl = new URL(authBaseUrl);
+  return {
+    // The demo app uses DaVinci when all three values are set, otherwise the legacy PingOne login.
+    enabled: Boolean(environmentId && policyId && apiKey),
+    environmentId,
+    policyId,
+    apiKey,
+    // Optional: only accept signed responses from this flow.
+    flowId,
+    // Base URL the widget talks to, and the issuer of the tokens DaVinci signs.
+    apiRoot: `${authBaseUrl}/`,
+    issuer: environmentId ? `${authBaseUrl}/${environmentId}/davinci` : undefined,
+    // The SDK token endpoint lives on the orchestrate-api host of the same region.
+    sdkTokenUrl: environmentId
+      ? `https://${authUrl.hostname.replace(/^auth\./, "orchestrate-api.")}/v1/company/${environmentId}/sdktoken`
+      : undefined,
+    // Where davinci.js and the flow's stylesheets are served from.
+    assetsOrigin: `https://${authUrl.hostname.replace(/^auth\./, "assets.")}`,
+  };
+}
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 
 const authsignalUrls = getAuthsignalUrls();
@@ -125,7 +208,8 @@ export const config = {
   authsignal: {
     secret: required("AUTHSIGNAL_SECRET"),
     tenantId: required("AUTHSIGNAL_TENANT_ID"),
-    apiUrl: authsignalUrls.apiUrl,
+    // AUTHSIGNAL_API_URL overrides the region default (e.g. a mock server in tests).
+    apiUrl: optional("AUTHSIGNAL_API_URL", authsignalUrls.apiUrl).replace(/\/$/, ""),
     oidcUrl: authsignalUrls.oidcUrl,
   },
 
@@ -137,6 +221,9 @@ export const config = {
     authBaseUrl: pingoneUrls.authBaseUrl,
     apiBaseUrl: pingoneUrls.apiBaseUrl,
   },
+
+  // ─── DaVinci ────────────────────────────────────────────────────────────
+  davinci: getDavinciConfig(pingoneUrls.authBaseUrl),
 
   // ─── App ────────────────────────────────────────────────────────────────
   app: {
@@ -150,4 +237,6 @@ export const config = {
     ),
   },
 
+  // ─── OIDC Provider ──────────────────────────────────────────────────────
+  oidcProvider: getOidcProviderConfig(),
 } as const;

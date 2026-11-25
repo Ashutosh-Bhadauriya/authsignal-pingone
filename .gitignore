@@ -2,3 +2,6 @@ node_modules/
 dist/
 .env
 *.log
+.oidc-signing-key.json
+demo/
+davinci/exports/
