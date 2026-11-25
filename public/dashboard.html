@@ -101,17 +101,26 @@
           <span class="badge" id="mfa-badge"></span>
         </h2>
         <div class="info-grid">
-          <span class="info-label">User ID</span>
+          <span class="info-label" id="user-id-label">User ID</span>
           <span class="info-value" id="user-id">-</span>
 
-          <span class="info-label">Email</span>
-          <span class="info-value" id="email">-</span>
+          <span class="info-label" data-legacy>Email</span>
+          <span class="info-value" data-legacy id="email">-</span>
 
-          <span class="info-label">Display Name</span>
-          <span class="info-value" id="display-name">-</span>
+          <span class="info-label" data-legacy>Display Name</span>
+          <span class="info-value" data-legacy id="display-name">-</span>
 
-          <span class="info-label">MFA Method</span>
-          <span class="info-value" id="mfa-method">-</span>
+          <span class="info-label" data-legacy>MFA Method</span>
+          <span class="info-value" data-legacy id="mfa-method">-</span>
+
+          <span class="info-label" data-davinci style="display:none;">Signed in through</span>
+          <span class="info-value" data-davinci style="display:none;">PingOne DaVinci flow policy</span>
+
+          <span class="info-label" data-davinci style="display:none;">Verified by</span>
+          <span class="info-value" data-davinci style="display:none;">Authsignal Flow (no password)</span>
+
+          <span class="info-label">Authsignal Methods</span>
+          <span class="info-value" id="enrolled-methods">-</span>
 
           <span class="info-label">Authenticated At</span>
           <span class="info-value" id="auth-time">-</span>
@@ -119,7 +128,7 @@
       </div>
 
       <div class="card">
-        <h2>MFA Settings</h2>
+        <h2>Authenticators</h2>
         <p style="font-size: 0.875rem; color: var(--muted); margin-bottom: 1rem;">
           Manage your authenticators: add passkeys, TOTP apps, phone numbers, and more.
         </p>

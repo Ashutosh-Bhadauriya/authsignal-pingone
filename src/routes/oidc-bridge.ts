@@ -1,21 +1,20 @@
 /**
- * MFA Federation Bridge Routes
+ * Legacy MFA bridge (demo app only)
  *
- * A redirect-based bridge that lets PingOne sign-on flows delegate the MFA
- * step to Authsignal's OIDC-based MFA, then resume the PingOne flow.
+ * The demo app redirects the browser here after PingOne login. The bridge runs
+ * Authsignal's OIDC MFA (classic actions, via /init-auth) and redirects back to
+ * the demo with a server-side result.
  *
- * This bridge is an OIDC *client* to Authsignal (not an OIDC provider).
- * PingOne triggers it via a browser redirect (e.g. from a custom sign-on
- * policy step), NOT via the PingOne "External IdP" admin configuration.
+ * PingOne and DaVinci do not call these routes. They use the standard OIDC
+ * provider in ./oidc-provider.ts, which runs an Authsignal Flow.
  *
  * Flow:
- * 1. User authenticates with PingOne (username/password)
- * 2. PingOne redirects browser to /oidc/initiate with user context
- * 3. Bridge calls Authsignal /init-auth, then redirects to Authsignal OIDC /auth
- * 4. User completes MFA in Authsignal's UI
- * 5. Authsignal redirects to /oidc/callback with an authorization code
- * 6. Bridge exchanges code, verifies the ID token, validates the MFA result
- * 7. Bridge redirects back to PingOne /as/resume to continue the sign-on flow
+ * 1. Demo app redirects the browser to /oidc/initiate with callback_url + callback_state
+ * 2. Bridge calls Authsignal /init-auth, then redirects to Authsignal OIDC /auth
+ * 3. User completes MFA in Authsignal's UI
+ * 4. Authsignal redirects to /oidc/callback with an authorization code
+ * 5. Bridge exchanges the code, verifies the ID token and records the MFA result
+ * 6. Bridge redirects back to callback_url
  */
 
 import { Router, type Request, type Response } from "express";
@@ -27,10 +26,7 @@ import {
   generateCodeVerifier,
   generateCodeChallenge,
 } from "../utils/crypto.js";
-import {
-  verifyAuthsignalIdToken,
-  verifyPingOneIdToken,
-} from "../utils/jwt.js";
+import { verifyAuthsignalIdToken } from "../utils/jwt.js";
 import {
   SAFE_CALLBACK_STATE_RE,
   SAFE_IDENTIFIER_RE,
@@ -74,8 +70,7 @@ setInterval(() => {
  * Initiates Authsignal MFA via the OIDC federation bridge.
  *
  * Can be triggered by:
- * - PingOne sign-on policy redirect (with flow_id + id_token_hint)
- * - A customer app redirect (with callback_url + callback_state)
+ * - The demo app (with callback_url + callback_state)
  * - Direct call for testing (returns JSON on completion)
  */
 router.get("/initiate", async (req: Request, res: Response) => {
@@ -84,53 +79,10 @@ router.get("/initiate", async (req: Request, res: Response) => {
     const emailParam = getQueryString(req.query.email);
     const phone = getQueryString(req.query.phone);
     const actionParam = getQueryString(req.query.action);
-    const flowId = getQueryString(req.query.flow_id);
-    const idTokenHint = getQueryString(req.query.id_token_hint);
     const callbackUrlParam = getQueryString(req.query.callback_url);
     const callbackStateParam = getQueryString(req.query.callback_state);
-    const isPingOneResumeFlow = Boolean(flowId);
-
-    // PingOne-driven resume mode must derive identity from a verified token hint.
-    if (isPingOneResumeFlow && !idTokenHint) {
-      res.status(400).json({ error: "id_token_hint is required when flow_id is provided" });
-      return;
-    }
-
-    let userId = userIdParam;
-    let userEmail = emailParam;
-
-    if (idTokenHint) {
-      try {
-        const claims = await verifyPingOneIdToken(
-          idTokenHint,
-          config.pingone.authBaseUrl,
-          config.pingone.environmentId,
-          config.pingone.clientId
-        );
-
-        const hintedUserId = claims.sub;
-        const hintedEmail = getStringClaim(claims as Record<string, unknown>, "email");
-
-        if (!hintedUserId) {
-          res.status(400).json({ error: "id_token_hint is missing sub" });
-          return;
-        }
-        if (userIdParam && userIdParam !== hintedUserId) {
-          res.status(400).json({ error: "user_id does not match id_token_hint" });
-          return;
-        }
-        if (emailParam && hintedEmail && emailParam !== hintedEmail) {
-          res.status(400).json({ error: "email does not match id_token_hint" });
-          return;
-        }
-
-        userId = hintedUserId;
-        userEmail = hintedEmail ?? userEmail;
-      } catch {
-        res.status(400).json({ error: "Invalid id_token_hint" });
-        return;
-      }
-    }
+    const userId = userIdParam;
+    const userEmail = emailParam;
 
     if (!userId) {
       res.status(400).json({ error: "user_id is required" });
@@ -149,14 +101,6 @@ router.get("/initiate", async (req: Request, res: Response) => {
       res.status(400).json({ error: "Invalid phone format" });
       return;
     }
-    if (flowId && !SAFE_IDENTIFIER_RE.test(flowId)) {
-      res.status(400).json({ error: "Invalid flow_id format" });
-      return;
-    }
-    if (flowId && callbackUrlParam) {
-      res.status(400).json({ error: "flow_id and callback_url are mutually exclusive" });
-      return;
-    }
     if (callbackUrlParam && !callbackStateParam) {
       res.status(400).json({ error: "callback_state is required with callback_url" });
       return;
@@ -170,7 +114,7 @@ router.get("/initiate", async (req: Request, res: Response) => {
       return;
     }
 
-    const action = isPingOneResumeFlow ? "mfa" : normalizeAction(actionParam);
+    const action = normalizeAction(actionParam);
 
     // Enforce max sessions to prevent memory exhaustion
     if (bridgeSessions.size >= MAX_BRIDGE_SESSIONS) {
@@ -198,7 +142,6 @@ router.get("/initiate", async (req: Request, res: Response) => {
       state,
       codeVerifier,
       pingOneUserId: userId,
-      pingOneSessionId: flowId,
       callbackUrl: callbackUrlParam,
       callbackState: callbackStateParam,
       action,
@@ -294,22 +237,7 @@ router.get("/callback", async (req: Request, res: Response) => {
       return;
     }
 
-    // 1. PingOne resume flow — redirect back to PingOne
-    if (session.pingOneSessionId) {
-      const resumeUrl = new URL(
-        `${config.pingone.authBaseUrl}/${config.pingone.environmentId}/as/resume`
-      );
-      resumeUrl.searchParams.set("flowId", session.pingOneSessionId);
-
-      if (mfaSucceeded) {
-        res.redirect(resumeUrl.toString());
-      } else {
-        res.status(403).json({ error: "MFA verification failed" });
-      }
-      return;
-    }
-
-    // 2. Callback mode — redirect back to the caller's app
+    // 1. Callback mode — redirect back to the caller's app
     if (session.callbackUrl) {
       const stored = recordMfaResult({
         callbackState: session.callbackState!,
@@ -332,7 +260,7 @@ router.get("/callback", async (req: Request, res: Response) => {
       return;
     }
 
-    // 3. API mode — return JSON (for testing)
+    // 2. API mode — return JSON (for testing)
     res.json({
       success: mfaSucceeded,
       userId: session.pingOneUserId,

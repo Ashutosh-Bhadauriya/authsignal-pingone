@@ -134,3 +134,100 @@ export async function oidcTokenExchange(params: {
 
   return response.json() as Promise<AuthsignalTokenResponse>;
 }
+
+// ─── Flows ──────────────────────────────────────────────────────────────────
+// Start and verify an Authsignal Flow (action type FLOW). Flows replace the
+// classic track/validate pair: `POST /flows` returns a hosted-UI URL, and
+// `POST /flows/verify` consumes the single-use challenge token the hosted UI
+// appends to the redirect URL.
+
+const FLOWS_TIMEOUT_MS = 10_000;
+
+function basicAuthHeader(): string {
+  return `Basic ${Buffer.from(`${config.authsignal.secret}:`).toString("base64")}`;
+}
+
+export type FlowState =
+  | "CHALLENGE_REQUIRED"
+  | "CHALLENGE_SUCCEEDED"
+  | "CHALLENGE_FAILED";
+
+export interface FlowStep {
+  stepType?: string;
+  verificationMethod?: string;
+  userAuthenticatorId?: string;
+}
+
+export interface StartFlowResponse {
+  challengeId: string;
+  challengeToken: string;
+  challengeUrl: string;
+  action: { state: FlowState; completedSteps?: FlowStep[] };
+}
+
+export interface VerifyFlowResponse {
+  challengeId: string;
+  action: { state: FlowState; completedSteps?: FlowStep[] };
+  user?: { userId?: string };
+}
+
+export class AuthsignalApiError extends Error {
+  constructor(
+    readonly operation: string,
+    readonly status: number
+  ) {
+    super(`Authsignal ${operation} failed with status ${status}`);
+  }
+}
+
+async function flowsRequest<T>(
+  operation: string,
+  path: string,
+  body: unknown
+): Promise<T> {
+  const response = await fetch(`${config.authsignal.apiUrl}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: basicAuthHeader(),
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(FLOWS_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    throw new AuthsignalApiError(operation, response.status);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+export async function startFlow(params: {
+  actionCode: string;
+  userId: string;
+  redirectUrl: string;
+  ipAddress?: string;
+  userAgent?: string;
+}): Promise<StartFlowResponse> {
+  const attributes =
+    params.ipAddress || params.userAgent
+      ? { ipAddress: params.ipAddress, userAgent: params.userAgent }
+      : undefined;
+
+  return flowsRequest<StartFlowResponse>("start flow", "/flows", {
+    actionCode: params.actionCode,
+    user: { userId: params.userId },
+    redirectUrl: params.redirectUrl,
+    attributes,
+  });
+}
+
+export async function verifyFlow(params: {
+  actionCode: string;
+  challengeToken: string;
+}): Promise<VerifyFlowResponse> {
+  return flowsRequest<VerifyFlowResponse>("verify flow", "/flows/verify", {
+    actionCode: params.actionCode,
+    challengeToken: params.challengeToken,
+  });
+}

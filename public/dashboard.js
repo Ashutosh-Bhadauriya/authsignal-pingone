@@ -41,8 +41,18 @@
       document.getElementById("auth-time").textContent =
         data.authenticatedAt ? new Date(data.authenticatedAt).toLocaleString() : "-";
 
+      var methods = Array.isArray(data.enrolledMethods) ? data.enrolledMethods : [];
+      document.getElementById("enrolled-methods").textContent =
+        methods.length ? methods.join(", ").replace(/_/g, " ") : "-";
+
       var badge = document.getElementById("mfa-badge");
-      if (data.mfaVerified) {
+      if (data.provider === "davinci") {
+        document.getElementById("user-id-label").textContent = "Signed in as";
+        document.querySelectorAll("[data-legacy]").forEach(function (el) { el.style.display = "none"; });
+        document.querySelectorAll("[data-davinci]").forEach(function (el) { el.style.display = ""; });
+        badge.textContent = "Verified by Authsignal";
+        badge.className = "badge badge-success";
+      } else if (data.mfaVerified) {
         badge.textContent = "MFA Verified";
         badge.className = "badge badge-success";
       } else {

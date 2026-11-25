@@ -15,7 +15,6 @@ export interface OidcBridgeSession {
   state: string;
   codeVerifier: string;
   pingOneUserId: string;
-  pingOneSessionId?: string;
   callbackUrl?: string;
   callbackState?: string;
   action: string;
@@ -28,6 +27,8 @@ export interface OidcBridgeSession {
 export interface AppSession {
   userId: string;
   pingOneUserId: string;
+  /** Which sign-in mode created the session. */
+  provider: "davinci" | "pingone";
   email?: string;
   displayName?: string;
   mfaVerified: boolean;

@@ -78,3 +78,52 @@ export function csrfOriginCheck(req: Request, res: Response, next: NextFunction)
 
   next();
 }
+
+/**
+ * Rate limit for the OIDC provider endpoints. Looser than authRateLimit because
+ * PingOne calls discovery, JWKS and token server-to-server from shared IPs.
+ */
+export const providerRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "temporarily_unavailable" },
+});
+
+/** Rate limit for the demo app's own routes (page loads call several of them). */
+export const demoRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests" },
+});
+
+/**
+ * Content Security Policy for the sign-in page when it hosts the DaVinci widget.
+ * davinci.js is loaded from Ping's asset host, runs the scripts of Custom HTML
+ * nodes and styles the flow inline, so this page needs more than the default
+ * policy. Every other page keeps the strict one.
+ */
+export function widgetPageCsp(req: Request, res: Response, next: NextFunction): void {
+  if (config.davinci.enabled && req.method === "GET" && (req.path === "/" || req.path === "/index.html")) {
+    const assets = config.davinci.assetsOrigin;
+    const api = new URL(config.davinci.apiRoot).origin;
+    res.setHeader(
+      "Content-Security-Policy",
+      [
+        "default-src 'self'",
+        `script-src 'self' ${assets} 'unsafe-inline' 'unsafe-eval'`,
+        `style-src 'self' 'unsafe-inline' ${assets} ${api} https://fonts.googleapis.com`,
+        `font-src 'self' data: ${assets} https://fonts.gstatic.com`,
+        "img-src 'self' data: https:",
+        `connect-src 'self' ${api} ${assets} https://*.launchdarkly.com`,
+        "object-src 'none'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+      ].join("; ")
+    );
+  }
+  next();
+}
